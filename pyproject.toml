@@ -4,4 +4,10 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "fastparquet>=2024.11.0",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "pyarrow>=20.0.0",
+    "tqdm>=4.67.1",
+]

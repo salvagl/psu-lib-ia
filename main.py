@@ -51,7 +51,7 @@ def main():
     #---------------------------------------------------------------------------------------------
     #Gráfica:
     # Visualización de las sesiones más activas
-    requests_per_session_sorted = requests_per_session.sort_values(by='num_requests', ascending=False).head(1000)
+    requests_per_session_sorted = requests_per_session.sort_values(by='num_requests', ascending=False).head(50)
 
     print(requests_per_session_sorted.shape)
     plt.figure(figsize=(12, 6))

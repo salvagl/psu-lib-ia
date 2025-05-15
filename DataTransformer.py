@@ -1,8 +1,13 @@
 import pandas as pd
+import numpy as np
 import requests
 import time
 import json
 import os
+from tqdm.auto import tqdm
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
 
 class DataTransformer:
     """
@@ -18,7 +23,7 @@ class DataTransformer:
         transformer.save_cache()
     """
 
-    def __init__(self, token: str, cache_file: str = None, delay: float = 0.1, session_minutes = 30):
+    def __init__(self, token: str, cache_file: str = None, delay: float = 0.005, session_minutes = 30):
         """
         Inicializa el transformer.
 
@@ -76,12 +81,13 @@ class DataTransformer:
         if ip in self.ip_cache:
             return self.ip_cache[ip]
 
-        url = f"https://ipinfo.io/{ip}/json"
+        #url = f"https://ipinfo.io/{ip}/json"
+        url = f"https://api.ipinfo.io/lite/{ip}"
         headers = {'Authorization': f'Bearer {self.token}'}
         try:
             resp = requests.get(url, headers=headers, timeout=5)
             data = resp.json()
-            country_code = data.get('country', 'Unknown')
+            country_code = data.get('country_code', 'Unknown')
             # Guardamos en caché y esperamos un poco
             self.ip_cache[ip] = country_code
             time.sleep(self.delay)
@@ -100,8 +106,12 @@ class DataTransformer:
         :param new_col: Nombre de la columna a añadir con el país
         :return: DataFrame enriquecido (modifica copia)
         """
+        print ("- Adding col.: country_code from IP (external service: IpInfo-Lite)")
         df_copy = df.copy()
-        df_copy[new_col] = df_copy[ip_col].apply(self.get_country_from_ip)
+        tqdm.pandas(desc="Geolocalizando IPs")  # Configura tqdm para pandas
+        df_copy[new_col] = df_copy[ip_col].progress_apply(self.get_country_from_ip)
+
+        self.save_cache()
         return df_copy
    
     def transform_add_datetime_delta_between_requests(self, df: pd.DataFrame, new_col: str = 'datetime_delta_ms') -> pd.DataFrame:
@@ -112,6 +122,7 @@ class DataTransformer:
         :param df: DataFrame de pandas con la columna de IPs
         :return: DataFrame enriquecido (modifica copia)
        """
+       print ("transform_add_datetime_delta_between_requests: añadiendo col. datetime_delta_ms (tiempo en ms. transcurrido entre peticioens consecutivas")
        df_copy = df.copy()
        df_copy['datetime'] = pd.to_datetime(df_copy['datetime'], format='%d/%b/%Y:%H:%M:%S %z')
        # diferencia como objetos Timedelta de Pandas y paso a milisegundos para tener un dato númerico
@@ -128,10 +139,13 @@ class DataTransformer:
         :param df: DataFrame de pandas con la columna de IPs
         :return: DataFrame enriquecido (modifica copia)
        """
+       print (f"- Adding col. session_global_id and datetime_delta_ms_in_session (id de sesión: request from same IP in range {self.session_minutes} min.")
        df_copy = df.copy()
        df_copy = df_copy.sort_values(by=['client', 'datetime'])
        df_copy['datetime'] = pd.to_datetime(df_copy['datetime'])
     
+       #Se obtiene el listado de sesiones basado en IP en rangos de tiempo de 'session_minutes' min. (Una misma IP puede 
+       #tener distintas sesiones si ha tenido actividad en rangos de tiempo superiores a 'session_minutes')
        df_copy['session_id'] = (df_copy.groupby('client')['datetime']
                           .diff().fillna(pd.Timedelta(seconds=0))
                           .gt(pd.Timedelta(minutes=self.session_minutes))
@@ -141,5 +155,70 @@ class DataTransformer:
     
        df_copy['datetime_delta_ms_in_session'] = (df_copy.groupby('session_global_id')['datetime']
                                             .diff().dt.total_seconds().fillna(0) * 1000)
+       
+       #Se elimina la columna temporal 'session_id':
+       df_copy.drop(columns=['session_id'],inplace=True)
     
        return df_copy
+    
+    def transform_normalize(self,df:pd.DataFrame, columns_to_normalize: list[str])-> pd.DataFrame:
+        """
+        Aplica Normalización/Escalado a las columnas numericas de un DataFrame
+        
+        :param df: DataFrame de pandas con la columna de IPs
+        :return: DataFrame Normalizado (modifica copia)
+        """
+        print (f"- Normalizing numeric columns...")
+
+        # Crear el transformador de columnas
+        preprocesador = ColumnTransformer(
+            transformers=[
+               ('num', MinMaxScaler(), columns_to_normalize)
+            ],
+            remainder='passthrough'  # Deja el resto de columnas sin transformar
+        )
+
+        # Aplicar la transformación
+        df_normalized = pd.DataFrame(
+            preprocesador.fit_transform(df),
+            columns=columns_to_normalize + [col for col in df.columns if col not in columns_to_normalize]
+        )
+        # Convertir explícitamente a tipos numéricos las columnas normalizadas
+        for col in columns_to_normalize:
+           df_normalized[col] = pd.to_numeric(df_normalized[col])
+        return df_normalized
+    
+    def transform_one_hot_encoder(self,df:pd.DataFrame, columns_to_ohe: list[str])-> pd.DataFrame:
+        """
+        Aplica OneHotEncoder a las columnas categoricas de baja cardinalidad de un DataFrame
+        
+        :param df: DataFrame de pandas con la columna de IPs
+        :param columns_to_ohe: columnas sobre las que se aplica OneHotEncoder
+        :return: DataFrame Normalizado (modifica copia)
+        """
+        print (f"- Normalizing categoric columns...")
+
+        # Crear el transformador de columnas
+        preprocessor = ColumnTransformer(
+           transformers=[
+              ('cat', OneHotEncoder(sparse_output=False, drop=None), columns_to_ohe)
+           ],
+           remainder='passthrough'  # Mantener columnas numéricas
+        )
+
+        #transformar
+        encoded_array = preprocessor.fit_transform(df[columns_to_ohe])
+
+        # Obtener nombres de las nuevas columnas
+        encoder = preprocessor.named_transformers_['cat']
+
+        new_col_names = encoder.get_feature_names_out(columns_to_ohe)
+
+        # Crear un nuevo DataFrame
+        #all_col_names = np.append(new_col_names,  [col for col in df.columns if col not in columns_to_ohe])
+        #df_encoded = pd.DataFrame(encoded_array, columns=all_col_names, index=df.index)
+        df_encoded = pd.DataFrame(encoded_array, columns=new_col_names, index=df.index)
+
+        df_final = pd.concat([df_encoded, df.drop(columns=columns_to_ohe)], axis=1)
+
+        return df_final

@@ -20,7 +20,7 @@ class DataCLFReader:
         regex = r'^(?P<client>\S+) \S+ (?P<userid>\S+) \[(?P<datetime>[^\]]+)\] "(?P<method>[A-Z]+) (?P<request>[^ "]+)? HTTP/[0-9.]+" (?P<status>[0-9]{3}) (?P<size>[0-9]+|-) "(?P<referrer>[^"]*)" "(?P<useragent>[^"]*)'
 
         # Define column names for parsed log data
-        columns = ['client', 'userid', 'datetime', 'method', 'request', 'status', 'size', 'referer', 'user_agent']
+        columns = ['client', 'userid', 'datetime', 'method', 'request', 'status', 'size_in_bytes', 'referer', 'user_agent']
 
         df=None
 
@@ -39,10 +39,12 @@ class DataCLFReader:
                 linenumber += 1
                 if linenumber % 250_000 == 0:
                     df = pd.DataFrame(parsed_lines, columns=columns)
+                    df['size_in_bytes'] = df['size_in_bytes'].astype(int)
                     df.to_parquet(f'{output_dir}/file_{linenumber}.parquet')
                     parsed_lines.clear()
             else:
                 df = pd.DataFrame(parsed_lines, columns=columns)
+                df['size_in_bytes'] = df['size_in_bytes'].astype(int)
                 df.to_parquet(f'{output_dir}/file_{linenumber}.parquet')
                 parsed_lines.clear()
         

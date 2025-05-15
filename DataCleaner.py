@@ -49,9 +49,10 @@ class DataCleaner:
                A    B
             0  1.0  4.0
         """
+        print("- Deleting rows with faulting categories ...")
         # se verifica que el parámetro sea un DataFrame de pandas
         if not isinstance(data, pd.DataFrame):
-            raise TypeError("El parámetro 'data' debe ser pandas.DataFrame")
+            raise TypeError("- El parámetro 'data' debe ser pandas.DataFrame")
         
         # se realiza una copia del DataFrame para no modificar el original
         df_copy = data.copy()
@@ -87,3 +88,15 @@ class DataCleaner:
         })
         
         return missing_info
+    
+    def delete_column(self,df:pd.DataFrame, column:str)-> pd.DataFrame:
+       """
+        Elimina la columna indicada en el parámetro 'column' 
+        
+        :param df: DataFrame de pandas 
+        :param column: columna a eliminar
+        :return: DataFrame modificado con una columna menos
+       """
+       print(f"- Deleting columns with irrelevant values: [{column}] ...")
+       df.drop(columns=[column], inplace=True)
+       return df

@@ -26,14 +26,21 @@ def main():
     # - añadir datetime_delta_ms: tiempo entre requests
     # - añadir session_global_id: identificador de sesiones en un rango de tiempo. (peticiones desde una misma IP en un rango definido)
     # - añadir datetime_delta_ms_in_session: tiempo entre request de una misma sesión.
-    # - eliminar userid: 
+    # - añadir request_len y referer_len : longitud de la petición y el referer de la petición.
+    
     transformed_df = transformer.transform_add_countrycode(df,"client","country_code" )
     
     transformed_df = transformer.transform_add_datetime_delta_between_requests(transformed_df)
     
     transformed_df = transformer.transform_add_session_info (transformed_df)
+
+    transformed_df = transformer.transform_add_length_columns (transformed_df,['request','referer'])
     
     #Limpieza de datos: 
+    # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
+    # - eliminar userid
+    # - eliminar client (ip) 
+
     print("--------------------------------------------------------------------------------")
     print ("Clean Data:")
     
@@ -51,13 +58,27 @@ def main():
     #Normalizar valores numéricos:
     normalized_df = transformer.transform_normalize (cleaned_df,['datetime_delta_ms','datetime_delta_ms_in_session','size_in_bytes'])
 
-
     #OneHotEncoder sobre categoricas de baja cardinalidad
+    normalized_df = transformer.transform_one_hot_encoder(normalized_df,['method','status'])
+    normalized_df = transformer.transform_feature_hashing(normalized_df,'country_code')
+    sparseMatrix_user_agent, v1 = transformer.transform_vectorize_categorical_text(normalized_df,'user_agent')
+    print("informacion de user_agent: ")
+    print(sparseMatrix_user_agent.shape)
+    sparseMatrix_request, v2 = transformer.transform_vectorize_url(normalized_df,'request')
+    print("informacion de request: ")
+    print(sparseMatrix_request.shape)
+    sparseMatrix_referer, v3 = transformer.transform_vectorize_url(normalized_df,'referer')
+    print("informacion de referer: ")
+    print(sparseMatrix_referer.shape)
 
+    final_df = transformer.transform_combine_numeric_and_sparse(normalized_df,[sparseMatrix_user_agent,sparseMatrix_referer,sparseMatrix_request])
     
-    print (normalized_df.head())
-    print (normalized_df.describe())
-    print (normalized_df.info())
+    print("DF final shape: " )
+    print(final_df.shape)
+
+    print (final_df.head())
+    #print (final_df.describe())
+    print (final_df.info())
     
     #print (f"Se muestra actividad de la sesión que más peticiones ha realizado: ")
     #print (cleaned_and_transformed_df[cleaned_and_transformed_df['client'] == '66.249.66.194'])
@@ -66,7 +87,7 @@ def main():
     requests_per_session = normalized_df.groupby('session_global_id').size().reset_index(name='num_requests')
 
     # D-Tale
-    server = dtale.show(normalized_df)
+    server = dtale.show(final_df)
     try:
         server.open_browser()
     except Exception:

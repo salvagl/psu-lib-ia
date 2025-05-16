@@ -8,6 +8,10 @@ from tqdm.auto import tqdm
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction import FeatureHasher
+from scipy.sparse import hstack
+
 
 class DataTransformer:
     """
@@ -161,6 +165,24 @@ class DataTransformer:
     
        return df_copy
     
+    def transform_add_length_columns(self,df:pd.DataFrame, columns: list[str]):
+        """
+        Añade columnas con la longitud de cadenas para cada columna indicada.
+
+        Parámetros:
+            df (pd.DataFrame): El DataFrame original.
+            columns (list): Lista de nombres de columnas sobre las que calcular la longitud.
+
+        Retorna:
+            pd.DataFrame: El DataFrame con columnas adicionales *_len.
+        """
+        for col in columns:
+            if col in df.columns:
+                df[f'{col}_len'] = df[col].astype(str).apply(len)
+            else:
+                print(f'Advertencia: la columna "{col}" no existe en el DataFrame.')
+        return df
+    
     def transform_normalize(self,df:pd.DataFrame, columns_to_normalize: list[str])-> pd.DataFrame:
         """
         Aplica Normalización/Escalado a las columnas numericas de un DataFrame
@@ -222,3 +244,95 @@ class DataTransformer:
         df_final = pd.concat([df_encoded, df.drop(columns=columns_to_ohe)], axis=1)
 
         return df_final
+
+    def transform_vectorize_url(self, df:pd.DataFrame, column:str):
+        """
+        Vectoriza una columna de URLs separando por '/' y devolviendo la matriz dispersa.
+        """
+        df[column] = df[column].astype(str).apply(lambda x: x.split('?')[0])
+        vectorizer = CountVectorizer(token_pattern=r'[^/]+',max_features=100)
+        return vectorizer.fit_transform(df[column]), vectorizer
+    
+    def transform_vectorize_categorical_text(self,df: pd.DataFrame, column: str):
+        """
+        Vectoriza texto categórico de una única columna del DataFrame usando tokenización simple por palabra.
+
+        :param df: DataFrame de entrada
+        :param column: Nombre de la columna a vectorizar (string)
+        :return: matriz dispersa (sparse matrix) y el vectorizador usado
+        """
+        from sklearn.feature_extraction.text import CountVectorizer
+
+        vectorizer = CountVectorizer(token_pattern=r'\b\w+\b',max_features=100)
+        matrix = vectorizer.fit_transform(df[column].astype(str))
+        return matrix, vectorizer
+
+    def transform_combine_numeric_and_sparse(self,df:pd.DataFrame, sparse_matrices)-> pd.DataFrame:
+        """
+        Toma un DataFrame con columnas numéricas y una lista de matrices dispersas,
+        y devuelve una única matriz combinada lista para entrenamiento.
+        param: array de nombres de columnas numéricas
+        param: array de matrices dispersas
+        return: DataFrame
+        """
+       # Seleccionar columnas numéricas automáticamente
+        numeric_df = df.select_dtypes(include=['number'])
+        #scaler = StandardScaler()
+        #numeric_scaled = scaler.fit_transform(numeric_df)
+        #df_numeric_scaled = pd.DataFrame(numeric_scaled, columns=numeric_df.columns, index=df.index)
+
+        # Combinar todas las matrices dispersas
+        combined_sparse = hstack(sparse_matrices).tocsr()
+
+        # Convertir sparse matrix a DataFrame
+        sparse_df = pd.DataFrame.sparse.from_spmatrix(combined_sparse, index=df.index)
+
+        # Concatenar y devolver
+        return pd.concat([numeric_df, sparse_df], axis=1)
+    
+    def transform_feature_hashing(self, df:pd.DataFrame, column_name, n_features=10, preserve_original=False)->pd.DataFrame:
+        """
+        Aplica Feature Hashing a una columna categórica de un DataFrame.
+        
+        Parámetros:
+        -----------
+        param df : pandas.DataFrame. DataFrame que contiene los datos
+        param column_name : str.  Nombre de la columna categórica a transformar 
+        param n_features : int, default=10 Número de dimensiones (features) para la matriz hash resultante
+        param preserve_original : bool, default=False. Si True, mantiene la columna original en el DataFrame resultante
+        
+        return: pandas.DataFrame
+            DataFrame con las nuevas columnas de feature hashing añadidas y
+            opcionalmente, la columna original eliminada
+        """
+        # Verificamos que la columna exista en el DataFrame
+        if column_name not in df.columns:
+            raise ValueError(f"La columna '{column_name}' no existe en el DataFrame")
+        
+        # Creamos una copia del DataFrame para no modificar el original
+        result_df = df.copy()
+        
+        # Convertimos los valores a strings (por si acaso no lo fueran)
+        values = result_df[column_name].astype(str).values
+        
+        # Creamos el feature hasher
+        hasher = FeatureHasher(n_features=n_features, input_type='string')
+        
+        # Aplicamos feature hashing - transformamos los valores a formato requerido
+        values_formatted = [[val] for val in values]  # Lista de listas para FeatureHasher
+        hashed_features = hasher.transform(values_formatted)
+        
+        # Convertimos la matriz dispersa en DataFrame
+        hashed_df = pd.DataFrame(
+            hashed_features.toarray(),
+            columns=[f"{column_name}_hash_{i}" for i in range(n_features)]
+        )
+        
+        # Concatenamos con el DataFrame original
+        result_df = pd.concat([result_df, hashed_df], axis=1)
+        
+        # Eliminamos la columna original si se especifica
+        if not preserve_original:
+            result_df = result_df.drop(columns=[column_name])
+        
+        return result_df

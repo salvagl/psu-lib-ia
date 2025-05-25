@@ -21,7 +21,7 @@ class DataTransformer:
                                                        (la primera petición contiene NaN en esta columna)
 
     Ejemplo de uso:
-        transformer = DataTransformer(token="TU_TOKEN", cache_file="cache.json")
+        transformer = DataTransformer(token="IPINFO_TOKEN", cache_file="cache.json")
         df = pd.DataFrame({'ip': ['8.8.8.8', '1.1.1.1']})
         df_transformed = transformer.transform_add_countrycode(df, ip_col='ip')
         transformer.save_cache()

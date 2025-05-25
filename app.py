@@ -1,0 +1,561 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from sklearn.ensemble import IsolationForest
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
+import pickle
+import os
+import tempfile
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Tuple
+import io
+from DataCLFReader import DataCLFReader
+
+# Implementación de la interfaz AIModelInterface
+class AIModelInterface(ABC):
+    @abstractmethod
+    def train_model(self, data, trainParams):
+        pass
+    
+    @abstractmethod
+    def save_model(self, modelName):
+        pass
+    
+    @abstractmethod
+    def load_model(self, modelName):
+        pass
+    
+    @abstractmethod
+    def test_model(self, data):
+        pass
+
+# Implementación para Isolation Forest
+class IsolationForestModel(AIModelInterface):
+    def __init__(self):
+        self.model = None
+        self.scaler = StandardScaler()
+        self.pca = PCA(n_components=2)
+        
+    def train_model(self, data, trainParams):
+        # Escalar datos
+        scaled_data = self.scaler.fit_transform(data)
+        
+        # Entrenar modelo
+        self.model = IsolationForest(
+            contamination=trainParams.get('contamination', 0.1),
+            n_estimators=trainParams.get('n_estimators', 100),
+            random_state=42
+        )
+        
+        predictions = self.model.fit_predict(scaled_data)
+        
+        # PCA para visualización
+        pca_data = self.pca.fit_transform(scaled_data)
+        
+        # Calcular métricas
+        anomaly_count = np.sum(predictions == -1)
+        normal_count = np.sum(predictions == 1)
+        
+        confusion_matrix = {
+            'anomalies': anomaly_count,
+            'normal': normal_count,
+            'contamination_rate': anomaly_count / len(predictions)
+        }
+        
+        return confusion_matrix, predictions, pca_data
+    
+    def save_model(self, modelName):
+        model_data = {
+            'model': self.model,
+            'scaler': self.scaler,
+            'pca': self.pca
+        }
+        
+        if not os.path.exists('models'):
+            os.makedirs('models')
+            
+        path = f'models/{modelName}_isolation_forest.pkl'
+        with open(path, 'wb') as f:
+            pickle.dump(model_data, f)
+        return path
+    
+    def load_model(self, modelName):
+        path = f'models/{modelName}_isolation_forest.pkl'
+        with open(path, 'rb') as f:
+            model_data = pickle.load(f)
+        
+        self.model = model_data['model']
+        self.scaler = model_data['scaler']
+        self.pca = model_data['pca']
+        return self.model
+    
+    def test_model(self, data):
+        if self.model is None:
+            raise ValueError("Modelo no entrenado")
+        
+        scaled_data = self.scaler.transform(data)
+        predictions = self.model.predict(scaled_data)
+        scores = self.model.decision_function(scaled_data)
+        pca_data = self.pca.transform(scaled_data)
+        
+        return predictions, scores, pca_data
+
+# Implementación para K-Means
+class KMeansModel(AIModelInterface):
+    def __init__(self):
+        self.model = None
+        self.scaler = StandardScaler()
+        self.pca = PCA(n_components=2)
+        
+    def train_model(self, data, trainParams):
+        # Escalar datos
+        scaled_data = self.scaler.fit_transform(data)
+        
+        # Entrenar modelo
+        k = trainParams.get('n_clusters', 8)
+        self.model = KMeans(
+            n_clusters=k,
+            random_state=42,
+            n_init=10
+        )
+        
+        cluster_labels = self.model.fit_predict(scaled_data)
+        
+        # PCA para visualización
+        pca_data = self.pca.fit_transform(scaled_data)
+        
+        # Calcular métricas
+        inertia = self.model.inertia_
+        silhouette_avg = silhouette_score(scaled_data, cluster_labels)
+        
+        # Detectar anomalías basándose en distancia a centroides
+        distances = self.model.transform(scaled_data)
+        min_distances = np.min(distances, axis=1)
+        threshold = np.percentile(min_distances, 90)  # Top 10% como anomalías
+        anomalies = min_distances > threshold
+        
+        confusion_matrix = {
+            'inertia': inertia,
+            'silhouette_score': silhouette_avg,
+            'n_clusters': k,
+            'anomalies': np.sum(anomalies),
+            'normal': len(anomalies) - np.sum(anomalies)
+        }
+        
+        return confusion_matrix, cluster_labels, pca_data, anomalies, min_distances
+    
+    def save_model(self, modelName):
+        model_data = {
+            'model': self.model,
+            'scaler': self.scaler,
+            'pca': self.pca
+        }
+        
+        if not os.path.exists('models'):
+            os.makedirs('models')
+            
+        path = f'models/{modelName}_kmeans.pkl'
+        with open(path, 'wb') as f:
+            pickle.dump(model_data, f)
+        return path
+    
+    def load_model(self, modelName):
+        path = f'models/{modelName}_kmeans.pkl'
+        with open(path, 'rb') as f:
+            model_data = pickle.load(f)
+        
+        self.model = model_data['model']
+        self.scaler = model_data['scaler']
+        self.pca = model_data['pca']
+        return self.model
+    
+    def test_model(self, data):
+        if self.model is None:
+            raise ValueError("Modelo no entrenado")
+        
+        scaled_data = self.scaler.transform(data)
+        cluster_labels = self.model.predict(scaled_data)
+        pca_data = self.pca.transform(scaled_data)
+        
+        # Calcular distancias para detección de anomalías
+        distances = self.model.transform(scaled_data)
+        min_distances = np.min(distances, axis=1)
+        
+        return cluster_labels, min_distances, pca_data
+
+# Función para calcular método del codo para K-Means
+def calculate_elbow_method(data, max_k=10):
+    scaled_data = StandardScaler().fit_transform(data)
+    inertias = []
+    k_range = range(1, max_k + 1)
+    
+    for k in k_range:
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+        kmeans.fit(scaled_data)
+        inertias.append(kmeans.inertia_)
+    
+    return k_range, inertias
+
+# Configuración de la página
+st.set_page_config(
+    page_title="Detección de Anomalías en Logs",
+    page_icon="🔍",
+    layout="wide"
+)
+
+# Título principal
+st.title("🔍 Detección de Anomalías en Logs de Servidores Web")
+st.markdown("---")
+
+# Sidebar para configuración
+st.sidebar.header("Configuración")
+
+# Selección de algoritmo
+algorithm = st.sidebar.selectbox(
+    "Seleccionar Algoritmo",
+    ["Isolation Forest", "K-Means Clustering"]
+)
+
+# Carga de datos
+st.sidebar.subheader("Cargar Datos")
+uploaded_file = st.sidebar.file_uploader("Subir archivo de logs (.log) en formato CLF", type=['log'])
+
+# Generar datos de ejemplo si no se carga archivo
+if uploaded_file is None:
+    if st.sidebar.button("Generar Datos de Ejemplo"):
+        # Generar datos sintéticos que simulan logs de servidor
+        np.random.seed(42)
+        n_samples = 1000
+        
+        # Datos normales
+        normal_data = np.random.multivariate_normal(
+            [100, 200, 0.5, 10], 
+            [[50, 0, 0, 0], [0, 100, 0, 0], [0, 0, 0.1, 0], [0, 0, 0, 25]], 
+            int(n_samples * 0.9)
+        )
+        
+        # Datos anómalos
+        anomaly_data = np.random.multivariate_normal(
+            [500, 1000, 2.0, 100], 
+            [[200, 0, 0, 0], [0, 500, 0, 0], [0, 0, 0.5, 0], [0, 0, 0, 100]], 
+            int(n_samples * 0.1)
+        )
+        
+        data = np.vstack([normal_data, anomaly_data])
+        df = pd.DataFrame(data, columns=['response_time', 'bytes_sent', 'error_rate', 'cpu_usage'])
+        
+        st.session_state['data'] = df
+        st.sidebar.success("Datos de ejemplo generados!")
+
+# Procesar datos cargados
+# Procesar datos cargados
+if uploaded_file is not None:
+    try:
+        # Crear archivo temporal para guardar el log
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.log') as temp_file:
+            temp_file.write(uploaded_file.getvalue())
+            temp_logfile_path = temp_file.name
+        
+        # Crear directorios temporales para salida y errores
+        with tempfile.TemporaryDirectory() as temp_output_dir:
+            temp_errors_file = os.path.join(temp_output_dir, 'parsing_errors.txt')
+            
+            # Instanciar el lector CLF y procesar el archivo
+            clf_reader = DataCLFReader()
+            
+            with st.spinner("Procesando archivo de logs CLF..."):
+                df = clf_reader.logs_to_df(
+                    logfile=temp_logfile_path,
+                    output_dir=temp_output_dir,
+                    errors_file=temp_errors_file
+                )
+            
+            # Limpiar archivo temporal
+            os.unlink(temp_logfile_path)
+            
+            if df is not None and not df.empty:
+                st.session_state['data'] = df
+                st.sidebar.success(f"Archivo procesado: {len(df)} registros")
+                
+                # Mostrar información sobre errores de parsing si existen
+                if os.path.exists(temp_errors_file):
+                    try:
+                        with open(temp_errors_file, 'r') as f:
+                            errors_content = f.read().strip()
+                        if errors_content:
+                            st.sidebar.warning(f"Se encontraron algunos errores de parsing. Revisa el archivo de errores.")
+                            with st.sidebar.expander("Ver errores de parsing"):
+                                st.text(errors_content)
+                    except:
+                        pass
+            else:
+                st.sidebar.error("No se pudieron procesar los logs. Verifica que el archivo tenga formato CLF válido.")
+                
+    except Exception as e:
+        st.sidebar.error(f"Error al procesar el archivo: {str(e)}")
+        # Limpiar archivo temporal en caso de error
+        try:
+            if 'temp_logfile_path' in locals():
+                os.unlink(temp_logfile_path)
+        except:
+            pass
+
+# Mostrar datos si están disponibles
+if 'data' in st.session_state:
+    df = st.session_state['data']
+    
+    # Información de los datos
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Vista Previa de los Datos")
+        st.dataframe(df.head())
+    
+    with col2:
+        st.subheader("Estadísticas Básicas")
+        st.dataframe(df.describe())
+    
+    # Configuración específica del algoritmo
+    st.sidebar.subheader("Hiperparámetros")
+    
+    if algorithm == "Isolation Forest":
+        contamination = st.sidebar.slider(
+            "Contaminación (% de anomalías esperadas)",
+            min_value=0.01,
+            max_value=0.5,
+            value=0.1,
+            step=0.01
+        )
+        
+        n_estimators = st.sidebar.slider(
+            "Número de Estimadores",
+            min_value=50,
+            max_value=300,
+            value=100,
+            step=10
+        )
+        
+        train_params = {
+            'contamination': contamination,
+            'n_estimators': n_estimators
+        }
+        
+    else:  # K-Means
+        # Mostrar método del codo
+        if st.sidebar.button("Calcular Método del Codo"):
+            with st.spinner("Calculando método del codo..."):
+                k_range, inertias = calculate_elbow_method(df.select_dtypes(include=[np.number]))
+                
+                fig_elbow = go.Figure()
+                fig_elbow.add_trace(go.Scatter(
+                    x=list(k_range),
+                    y=inertias,
+                    mode='lines+markers',
+                    name='Inercia',
+                    line=dict(color='blue', width=2),
+                    marker=dict(size=8)
+                ))
+                
+                fig_elbow.update_layout(
+                    title="Método del Codo para K-Means",
+                    xaxis_title="Número de Clusters (K)",
+                    yaxis_title="Inercia",
+                    template="plotly_white"
+                )
+                
+                st.plotly_chart(fig_elbow, use_container_width=True)
+        
+        n_clusters = st.sidebar.slider(
+            "Número de Clusters (K)",
+            min_value=2,
+            max_value=15,
+            value=8,
+            step=1
+        )
+        
+        train_params = {
+            'n_clusters': n_clusters
+        }
+    
+    # Botón para entrenar modelo
+    if st.sidebar.button("Entrenar Modelo", type="primary"):
+        with st.spinner("Entrenando modelo..."):
+            # Seleccionar solo columnas numéricas
+            numeric_df = df.select_dtypes(include=[np.number])
+            
+            if algorithm == "Isolation Forest":
+                model = IsolationForestModel()
+                confusion_matrix, predictions, pca_data = model.train_model(numeric_df, train_params)
+                
+                st.session_state['model'] = model
+                st.session_state['predictions'] = predictions
+                st.session_state['pca_data'] = pca_data
+                st.session_state['confusion_matrix'] = confusion_matrix
+                
+            else:  # K-Means
+                model = KMeansModel()
+                confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(numeric_df, train_params)
+                
+                st.session_state['model'] = model
+                st.session_state['cluster_labels'] = cluster_labels
+                st.session_state['pca_data'] = pca_data
+                st.session_state['confusion_matrix'] = confusion_matrix
+                st.session_state['anomalies'] = anomalies
+                st.session_state['distances'] = distances
+        
+        st.success("¡Modelo entrenado exitosamente!")
+    
+    # Mostrar resultados si el modelo está entrenado
+    if 'model' in st.session_state:
+        st.markdown("---")
+        st.header("Resultados del Entrenamiento")
+        
+        # Métricas
+        col1, col2, col3 = st.columns(3)
+        confusion_matrix = st.session_state['confusion_matrix']
+        
+        if algorithm == "Isolation Forest":
+            with col1:
+                st.metric("Anomalías Detectadas", confusion_matrix['anomalies'])
+            with col2:
+                st.metric("Registros Normales", confusion_matrix['normal'])
+            with col3:
+                st.metric("Tasa de Contaminación", f"{confusion_matrix['contamination_rate']:.2%}")
+                
+        else:  # K-Means
+            with col1:
+                st.metric("Inercia", f"{confusion_matrix['inertia']:.2f}")
+            with col2:
+                st.metric("Silhouette Score", f"{confusion_matrix['silhouette_score']:.3f}")
+            with col3:
+                st.metric("Número de Clusters", confusion_matrix['n_clusters'])
+        
+        # Visualizaciones
+        st.subheader("Visualizaciones")
+        
+        if algorithm == "Isolation Forest":
+            predictions = st.session_state['predictions']
+            pca_data = st.session_state['pca_data']
+            
+            # Crear gráfico de dispersión con PCA
+            fig = px.scatter(
+                x=pca_data[:, 0],
+                y=pca_data[:, 1],
+                color=['Anomalía' if p == -1 else 'Normal' for p in predictions],
+                title="Detección de Anomalías (Isolation Forest) - Vista PCA",
+                labels={'x': 'Primera Componente Principal', 'y': 'Segunda Componente Principal'},
+                color_discrete_map={'Normal': 'blue', 'Anomalía': 'red'}
+            )
+            
+            fig.update_traces(marker=dict(size=8, opacity=0.7))
+            fig.update_layout(template="plotly_white")
+            st.plotly_chart(fig, use_container_width=True)
+            
+        else:  # K-Means
+            cluster_labels = st.session_state['cluster_labels']
+            pca_data = st.session_state['pca_data']
+            anomalies = st.session_state['anomalies']
+            distances = st.session_state['distances']
+            
+            # Gráfico de clusters
+            fig1 = px.scatter(
+                x=pca_data[:, 0],
+                y=pca_data[:, 1],
+                color=cluster_labels.astype(str),
+                title="Clustering K-Means - Vista PCA",
+                labels={'x': 'Primera Componente Principal', 'y': 'Segunda Componente Principal'},
+                color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            
+            fig1.update_traces(marker=dict(size=8, opacity=0.7))
+            fig1.update_layout(template="plotly_white")
+            st.plotly_chart(fig1, use_container_width=True)
+            
+            # Gráfico de anomalías basado en distancia
+            fig2 = px.scatter(
+                x=pca_data[:, 0],
+                y=pca_data[:, 1],
+                color=['Anomalía' if a else 'Normal' for a in anomalies],
+                title="Detección de Anomalías basada en Distancia a Centroides",
+                labels={'x': 'Primera Componente Principal', 'y': 'Segunda Componente Principal'},
+                color_discrete_map={'Normal': 'blue', 'Anomalía': 'red'}
+            )
+            
+            fig2.update_traces(marker=dict(size=8, opacity=0.7))
+            fig2.update_layout(template="plotly_white")
+            st.plotly_chart(fig2, use_container_width=True)
+            
+            # Histograma de distancias
+            fig3 = px.histogram(
+                x=distances,
+                nbins=50,
+                title="Distribución de Distancias a Centroides",
+                labels={'x': 'Distancia Mínima al Centroide', 'y': 'Frecuencia'}
+            )
+            fig3.update_layout(template="plotly_white")
+            st.plotly_chart(fig3, use_container_width=True)
+    
+    # Funciones de guardar/cargar modelo
+    if 'model' in st.session_state:
+        st.markdown("---")
+        st.subheader("Gestión del Modelo")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            model_name = st.text_input("Nombre del modelo", value="mi_modelo")
+            if st.button("Guardar Modelo"):
+                try:
+                    path = st.session_state['model'].save_model(model_name)
+                    st.success(f"Modelo guardado en: {path}")
+                except Exception as e:
+                    st.error(f"Error al guardar: {str(e)}")
+        
+        with col2:
+            # Listar modelos guardados
+            if os.path.exists('models'):
+                saved_models = [f.replace('.pkl', '') for f in os.listdir('models') if f.endswith('.pkl')]
+                if saved_models:
+                    selected_model = st.selectbox("Cargar modelo guardado", saved_models)
+                    if st.button("Cargar Modelo"):
+                        try:
+                            if algorithm == "Isolation Forest":
+                                model = IsolationForestModel()
+                                model.load_model(selected_model.replace('_isolation_forest', ''))
+                            else:
+                                model = KMeansModel()
+                                model.load_model(selected_model.replace('_kmeans', ''))
+                            
+                            st.session_state['model'] = model
+                            st.success("Modelo cargado exitosamente!")
+                        except Exception as e:
+                            st.error(f"Error al cargar: {str(e)}")
+
+else:
+    st.info("👆 Por favor, carga un archivo .log en formato CLF o genera datos de ejemplo desde el panel lateral para comenzar.")
+
+# Información adicional
+with st.expander("ℹ️ Información sobre los Algoritmos"):
+    st.markdown("""
+    ### Isolation Forest
+    - **Uso**: Detección de anomalías no supervisada
+    - **Principio**: Aísla anomalías mediante particionamiento aleatorio
+    - **Parámetros clave**:
+        - *Contaminación*: Proporción esperada de anomalías en los datos
+        - *N estimadores*: Número de árboles en el bosque
+    
+    ### K-Means Clustering
+    - **Uso**: Clustering y detección de anomalías basada en distancia
+    - **Principio**: Agrupa datos en K clusters y detecta puntos lejanos a centroides
+    - **Parámetros clave**:
+        - *K*: Número de clusters
+        - *Método del codo*: Ayuda a determinar el K óptimo
+    - **Métricas**:
+        - *Inercia*: Suma de distancias cuadráticas a centroides (menor es mejor)
+        - *Silhouette Score*: Calidad del clustering (-1 a 1, mayor es mejor)
+    """)

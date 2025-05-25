@@ -16,3 +16,5 @@ Previous:
 
 4. Install D-Tale : uv pip install dtail (installed with simple "uv add" result in an error by kaleido dependency)
 
+5. Run UI with StreamLit : uv run streamlit run app.py
+

@@ -342,7 +342,7 @@ if uploaded_file is not None:
                 df = clf_reader.logs_to_df(
                     logfile=temp_logfile_path,
                     output_dir=temp_output_dir,
-                    errors_file=temp_errors_file
+                    errors_file="parsing_errors.txt"
                 )
             
             # Limpiar archivo temporal

@@ -16,6 +16,14 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 import io
 from DataCLFReader import DataCLFReader
+from DataTransformer import DataTransformer
+from DataCleaner import DataCleaner
+import time
+from dotenv import load_dotenv
+from settings import IPINFO_TOKEN, CACHE_FILE
+
+
+SESSION_MIN =20
 
 # Implementación de la interfaz AIModelInterface
 class AIModelInterface(ABC):
@@ -202,6 +210,70 @@ def calculate_elbow_method(data, max_k=10):
     
     return k_range, inertias
 
+def transform_data(data:pd.DataFrame)->pd.DataFrame:
+   transformer = DataTransformer(token=IPINFO_TOKEN,cache_file=CACHE_FILE,session_minutes=SESSION_MIN)
+   cleaner = DataCleaner()
+
+   #Transformación de datos:
+   # - añadir country_code: código ISO de pais en función de la IP
+   # - añadir datetime_delta_ms: tiempo entre requests
+   # - añadir session_global_id: identificador de sesiones en un rango de tiempo. (peticiones desde una misma IP en un rango definido)
+   # - añadir datetime_delta_ms_in_session: tiempo entre request de una misma sesión.
+   # - añadir request_len y referer_len : longitud de la petición y el referer de la petición.
+   transformed_df = transformer.transform_add_countrycode(df,"client","country_code" )
+   transformed_df = transformer.transform_add_datetime_delta_between_requests(transformed_df)
+   transformed_df = transformer.transform_add_session_info (transformed_df)
+   transformed_df = transformer.transform_add_length_columns (transformed_df,['request','referer'])
+   #Limpieza de datos: 
+    # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
+    # - eliminar userid
+    # - eliminar client (ip) 
+   cleaned_df = cleaner.delete_rows_with_faulting_category(transformed_df)
+   cleaned_df = cleaner.delete_column (cleaned_df,'userid')   
+   cleaned_df = cleaner.delete_column (cleaned_df,'client')
+
+   #Normalizar valores numéricos:
+   normalized_df = transformer.transform_normalize (cleaned_df,['datetime_delta_ms','datetime_delta_ms_in_session','size_in_bytes'])   
+   
+   #OneHotEncoder sobre categoricas de baja cardinalidad: +interpretabilidad
+   normalized_df = transformer.transform_one_hot_encoder(normalized_df,['method','status'])
+   
+   #FeatureHashing sobre categoricas de cardinalidad media: -interpretabilidad
+   normalized_df = transformer.transform_feature_hashing(normalized_df,'country_code')
+
+   #Tokenizacion+Vectorización categóricas/texto alta cardinalidad
+   sparseMatrix_user_agent, v1 = transformer.transform_vectorize_categorical_text(normalized_df,'user_agent')
+   sparseMatrix_request, v2 = transformer.transform_vectorize_url(normalized_df,'request')
+   sparseMatrix_referer, v3 = transformer.transform_vectorize_url(normalized_df,'referer')
+    
+   final_df = transformer.transform_combine_numeric_and_sparse(normalized_df,[sparseMatrix_user_agent,sparseMatrix_referer,sparseMatrix_request])
+
+   #Establece todos los nombres de columnas de tipo String.
+   final_df.columns = final_df.columns.astype(str) 
+   return final_df
+   
+def toggle_state_data_processed():
+    st.session_state['data_processed'] = not st.session_state['data_processed'] 
+
+def render_dataframe_sample(df:pd.DataFrame):
+
+    df_dense = df.copy()
+    
+    # Convierte columnas sparse a densas
+    for col in df_dense.columns:
+        if  isinstance(df_dense[col].dtype, pd.SparseDtype):
+            df_dense[col] = df_dense[col].sparse.to_dense()
+
+    # Información de los datos sin procesar
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader(f"Vista Previa de los Datos")
+        st.dataframe(df_dense.head())
+    
+    with col2:
+        st.subheader("Estadísticas Básicas")
+        st.dataframe(df_dense.describe())
+
 # Configuración de la página
 st.set_page_config(
     page_title="Detección de Anomalías en Logs",
@@ -209,22 +281,20 @@ st.set_page_config(
     layout="wide"
 )
 
+
+if 'data_processed' not in st.session_state:
+    st.session_state['data_processed'] = False
+
 # Título principal
-st.title("🔍 Detección de Anomalías en Logs de Servidores Web")
+st.title(f"🔍 Detección de Anomalías en Logs de Servidores Web (data_processed={st.session_state['data_processed']})")
 st.markdown("---")
 
 # Sidebar para configuración
 st.sidebar.header("Configuración")
 
-# Selección de algoritmo
-algorithm = st.sidebar.selectbox(
-    "Seleccionar Algoritmo",
-    ["Isolation Forest", "K-Means Clustering"]
-)
-
 # Carga de datos
 st.sidebar.subheader("Cargar Datos")
-uploaded_file = st.sidebar.file_uploader("Subir archivo de logs (.log) en formato CLF", type=['log'])
+uploaded_file = st.sidebar.file_uploader("Subir archivo de logs (.log) en formato CLF", type=['log'],help="Selecciona un fichero log en formato CLF")
 
 # Generar datos de ejemplo si no se carga archivo
 if uploaded_file is None:
@@ -254,7 +324,6 @@ if uploaded_file is None:
         st.sidebar.success("Datos de ejemplo generados!")
 
 # Procesar datos cargados
-# Procesar datos cargados
 if uploaded_file is not None:
     try:
         # Crear archivo temporal para guardar el log
@@ -281,7 +350,7 @@ if uploaded_file is not None:
             
             if df is not None and not df.empty:
                 st.session_state['data'] = df
-                st.sidebar.success(f"Archivo procesado: {len(df)} registros")
+                st.sidebar.success(f"Registros de logs cargados: {len(df)} ")
                 
                 # Mostrar información sobre errores de parsing si existen
                 if os.path.exists(temp_errors_file):
@@ -310,15 +379,24 @@ if uploaded_file is not None:
 if 'data' in st.session_state:
     df = st.session_state['data']
     
-    # Información de los datos
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Vista Previa de los Datos")
-        st.dataframe(df.head())
+    if st.session_state['data_processed']==False :
+        render_dataframe_sample(df)
     
-    with col2:
-        st.subheader("Estadísticas Básicas")
-        st.dataframe(df.describe())
+    # Botón para transformar datos:
+    if st.sidebar.button("Procesar Datos",type="primary", on_click=toggle_state_data_processed):
+        with st.spinner("Procesando datos..."):
+            df_transformed=transform_data(df)
+            st.session_state['data_transformed'] = df_transformed
+        
+        toggle_state_data_processed()
+        render_dataframe_sample(st.session_state['data_transformed'])
+        
+
+    # Selección de algoritmo
+    algorithm = st.sidebar.selectbox(
+        "Seleccionar Algoritmo",
+        ["Isolation Forest", "K-Means Clustering"]
+        )
     
     # Configuración específica del algoritmo
     st.sidebar.subheader("Hiperparámetros")
@@ -381,12 +459,20 @@ if 'data' in st.session_state:
         train_params = {
             'n_clusters': n_clusters
         }
-    
+
     # Botón para entrenar modelo
-    if st.sidebar.button("Entrenar Modelo", type="primary"):
+    if st.sidebar.button("Entrenar Modelo", type="secondary"):
         with st.spinner("Entrenando modelo..."):
+            df=st.session_state['data_transformed']
+            
+            print (df.shape)
+            print (df.info())
+
             # Seleccionar solo columnas numéricas
             numeric_df = df.select_dtypes(include=[np.number])
+            
+            print (numeric_df.shape)
+            print (numeric_df.info())
             
             if algorithm == "Isolation Forest":
                 model = IsolationForestModel()
@@ -538,6 +624,11 @@ if 'data' in st.session_state:
 
 else:
     st.info("👆 Por favor, carga un archivo .log en formato CLF o genera datos de ejemplo desde el panel lateral para comenzar.")
+
+
+
+
+
 
 # Información adicional
 with st.expander("ℹ️ Información sobre los Algoritmos"):

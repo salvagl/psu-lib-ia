@@ -4,12 +4,14 @@ import requests
 import time
 import json
 import os
+import re
 from tqdm.auto import tqdm
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction import FeatureHasher
+from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy.sparse import hstack
 
 
@@ -129,8 +131,13 @@ class DataTransformer:
        print ("transform_add_datetime_delta_between_requests: añadiendo col. datetime_delta_ms (tiempo en ms. transcurrido entre peticioens consecutivas")
        df_copy = df.copy()
        df_copy['datetime'] = pd.to_datetime(df_copy['datetime'], format='%d/%b/%Y:%H:%M:%S %z')
+       
        # diferencia como objetos Timedelta de Pandas y paso a milisegundos para tener un dato númerico
        df_copy[new_col] = df_copy['datetime'].diff().dt.total_seconds() * 1000
+
+       # para el primer registro se instancia al valor mas frecuente en la columna
+       df_copy[new_col] = df_copy[new_col].fillna(df_copy[new_col].mode()[0])
+
        return df_copy
 
     def transform_add_session_info(self,df:pd.DataFrame)-> pd.DataFrame:
@@ -183,6 +190,80 @@ class DataTransformer:
                 print(f'Advertencia: la columna "{col}" no existe en el DataFrame.')
         return df
     
+    def transform_add_os_command_flag(self, df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        """
+        Añade columnas con indicador 1/0 si el texto contiene comandos comunes de sistema operativo (Linux/Windows).
+
+        Parámetros:
+            df (pd.DataFrame): El DataFrame original.
+            columns (list): Lista de nombres de columnas a analizar.
+
+        Retorna:
+            pd.DataFrame: El DataFrame con columnas adicionales *_has_os_command.
+        """
+        os_commands = [
+            'wget', 'curl', 'chmod', 'rm', 'ls', 'sh', 'bash', 'nc', 'netcat', 'scp',
+            'python', 'perl', 'php', 'telnet', 'tftp', 'powershell', 'cmd', 'whoami',
+            'netstat', 'ifconfig','cd'
+        ]
+
+        pattern = re.compile(r'\b(?:' + '|'.join(re.escape(cmd) for cmd in os_commands) + r')\b', re.IGNORECASE)
+
+        for col in columns:
+            if col in df.columns:
+                df[f'{col}_has_os_command'] = df[col].astype(str).apply(lambda x: 1 if pattern.search(x) else 0)
+            else:
+                print(f'Advertencia: la columna "{col}" no existe en el DataFrame.')
+        return df
+
+    def transform_add_hex_flag(self, df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        """
+        Añade columnas con indicador 1/0 si el texto contiene secuencias hexadecimales tipo '\\xHH'.
+
+        Parámetros:
+            df (pd.DataFrame): El DataFrame original.
+            columns (list): Lista de nombres de columnas a analizar.
+
+        Retorna:
+            pd.DataFrame: El DataFrame con columnas adicionales *_has_hex.
+        """
+        hex_pattern = re.compile(r'\\x[0-9a-fA-F]{2}')
+
+        for col in columns:
+            if col in df.columns:
+                df[f'{col}_has_hex'] = df[col].astype(str).apply(lambda x: 1 if hex_pattern.search(x) else 0)
+            else:
+                print(f'Advertencia: la columna "{col}" no existe en el DataFrame.')
+        return df
+
+    def transform_add_weird_char_freq(self, df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        """
+        Añade columnas con la frecuencia de caracteres sospechosos como ';', '&', '|', '`', '"', etc.
+
+        Parámetros:
+            df (pd.DataFrame): El DataFrame original.
+            columns (list): Lista de columnas a analizar.
+
+        Retorna:
+            pd.DataFrame: El DataFrame con columnas adicionales *_weird_char_freq.
+        """
+        weird_chars = set(";|&`'\"<>$\\(){}[]")
+
+        def compute_freq(s):
+            s = str(s)
+            if not s:
+                return 0
+            total = len(s)
+            weird_count = sum(1 for c in s if c in weird_chars)
+            return weird_count / total if total > 0 else 0
+
+        for col in columns:
+            if col in df.columns:
+                df[f'{col}_weird_char_freq'] = df[col].astype(str).apply(compute_freq)
+            else:
+                print(f'Advertencia: la columna "{col}" no existe en el DataFrame.')
+        return df
+
     def transform_normalize(self,df:pd.DataFrame, columns_to_normalize: list[str])-> pd.DataFrame:
         """
         Aplica Normalización/Escalado a las columnas numericas de un DataFrame
@@ -261,8 +342,7 @@ class DataTransformer:
         :param column: Nombre de la columna a vectorizar (string)
         :return: matriz dispersa (sparse matrix) y el vectorizador usado
         """
-        from sklearn.feature_extraction.text import CountVectorizer
-
+       
         vectorizer = CountVectorizer(token_pattern=r'\b\w+\b',max_features=100)
         matrix = vectorizer.fit_transform(df[column].astype(str))
         return matrix, vectorizer
@@ -336,3 +416,21 @@ class DataTransformer:
             result_df = result_df.drop(columns=[column_name])
         
         return result_df
+
+    def transform_vectorize_raw_request(self,df: pd.DataFrame, column: str)->pd.DataFrame:
+        """
+        Aplica TFIdfVectorizez a una columna categórica de un DataFrame. 
+        Se aplica este tipo de vectorización a la request RAW para ponderar y penalizar las palabras del diccionario más frecuetnes.
+        
+        Vectoriza texto categórico de una única columna del DataFrame usando tokenización de ngramas para detectar comandos 
+        cortos de entre 3 y 6 caracteres (la tokenización se realiza en bloques de 3, 4, 5 y 6 caracteres)
+
+        :param df: DataFrame de entrada
+        :param column: Nombre de la columna a vectorizar (string)
+        :return: matriz dispersa (sparse matrix) y el vectorizador usado
+        """
+        
+        vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200)
+        matrix = vectorizer.fit_transform(df[column].astype(str))
+        return matrix, vectorizer
+        

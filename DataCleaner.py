@@ -60,6 +60,15 @@ class DataCleaner:
         # se elimina las filas con al menos un valor faltante
         df_clean = df_copy.dropna()
         
+        filas_eliminadas = df_copy[~df_copy.index.isin(df_clean.index)]
+        print("\nFilas eliminadas por dropna():")
+
+        print(filas_eliminadas)
+        col_con_null = filas_eliminadas.columns[filas_eliminadas.isna().any()]
+        print('columna con null:')
+        print(col_con_null)
+
+
         # se resetean los índices para que sean consecutivos
         df_clean = df_clean.reset_index(drop=True)
         

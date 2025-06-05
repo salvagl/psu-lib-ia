@@ -210,22 +210,37 @@ def calculate_elbow_method(data, max_k=10):
     
     return k_range, inertias
 
+
+def clean_data(data:pd.DataFrame)->pd.DataFrame:
+      
+    # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
+    cleaner = DataCleaner()
+    print(data.shape)
+    cleaned_df = cleaner.delete_rows_with_faulting_category(data)
+    print(cleaned_df.shape)
+    return cleaned_df
+
 def transform_data(data:pd.DataFrame)->pd.DataFrame:
    transformer = DataTransformer(token=IPINFO_TOKEN,cache_file=CACHE_FILE,session_minutes=SESSION_MIN)
    cleaner = DataCleaner()
-
+   
    #Transformación de datos:
    # - añadir country_code: código ISO de pais en función de la IP
    # - añadir datetime_delta_ms: tiempo entre requests
    # - añadir session_global_id: identificador de sesiones en un rango de tiempo. (peticiones desde una misma IP en un rango definido)
    # - añadir datetime_delta_ms_in_session: tiempo entre request de una misma sesión.
    # - añadir request_len y referer_len : longitud de la petición y el referer de la petición.
-   transformed_df = transformer.transform_add_countrycode(df,"client","country_code" )
+   # - añadir flag que indica si la request contiene comandos típicos de SO que pueden indicar ataque.
+   # - añadir flag que indica si la request contiene caracteres Hexadecimales
+   # - añadir columna con conteo de caracteres extraños para una URL
+   transformed_df = transformer.transform_add_countrycode(data,"client","country_code" )
    transformed_df = transformer.transform_add_datetime_delta_between_requests(transformed_df)
-   transformed_df = transformer.transform_add_session_info (transformed_df)
+   transformed_df = transformer.transform_add_session_info (transformed_df)    
    transformed_df = transformer.transform_add_length_columns (transformed_df,['request','referer'])
-   #Limpieza de datos: 
-    # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
+   transformed_df = transformer.transform_add_os_command_flag(transformed_df,['raw_request'])    
+   transformed_df = transformer.transform_add_hex_flag(transformed_df,['raw_request'])
+   transformed_df = transformer.transform_add_weird_char_freq(transformed_df,['raw_request'])
+ 
     # - eliminar userid
     # - eliminar client (ip) 
    cleaned_df = cleaner.delete_rows_with_faulting_category(transformed_df)
@@ -245,8 +260,8 @@ def transform_data(data:pd.DataFrame)->pd.DataFrame:
    sparseMatrix_user_agent, v1 = transformer.transform_vectorize_categorical_text(normalized_df,'user_agent')
    sparseMatrix_request, v2 = transformer.transform_vectorize_url(normalized_df,'request')
    sparseMatrix_referer, v3 = transformer.transform_vectorize_url(normalized_df,'referer')
-    
-   final_df = transformer.transform_combine_numeric_and_sparse(normalized_df,[sparseMatrix_user_agent,sparseMatrix_referer,sparseMatrix_request])
+   sparseMatrix_rawRequest, v4 = transformer.transform_vectorize_raw_request(normalized_df,'raw_request') 
+   final_df = transformer.transform_combine_numeric_and_sparse(normalized_df,[sparseMatrix_rawRequest,sparseMatrix_user_agent,sparseMatrix_referer,sparseMatrix_request])
 
    #Establece todos los nombres de columnas de tipo String.
    final_df.columns = final_df.columns.astype(str) 
@@ -273,6 +288,71 @@ def render_dataframe_sample(df:pd.DataFrame):
     with col2:
         st.subheader("Estadísticas Básicas")
         st.dataframe(df_dense.describe())
+
+def show_anomalies_grid(original_df, predictions):
+    """
+    Muestra los registros originales donde se detectaron anomalías
+    
+    Args:
+        original_df: DataFrame original con todos los datos
+        predictions: Array con las predicciones (-1 para anomalías, 1 para normales)
+    """
+    
+    # Crear una copia del DataFrame original
+    df_with_predictions = original_df.copy()
+    
+    # Agregar columna con las predicciones
+    df_with_predictions['Anomaly'] = predictions
+    df_with_predictions['Is_Anomaly'] = predictions == -1
+    
+    # Filtrar solo las anomalías
+    anomalies_df = df_with_predictions[df_with_predictions['Is_Anomaly'] == True].copy()
+    
+    # Eliminar las columnas auxiliares para mostrar solo datos originales
+    anomalies_display = anomalies_df.drop(['Anomaly', 'Is_Anomaly'], axis=1)
+    
+    # Mostrar información general
+    st.subheader("📊 Resumen de Anomalías Detectadas")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total de Registros", len(original_df))
+    with col2:
+        st.metric("Anomalías Detectadas", len(anomalies_df))
+    with col3:
+        st.metric("Porcentaje de Anomalías", f"{len(anomalies_df)/len(original_df)*100:.2f}%")
+    
+    # Mostrar el grid con las anomalías
+    st.subheader("🚨 Registros con Anomalías Detectadas")
+    
+    if len(anomalies_df) > 0:
+        # Opción 1: Grid básico con st.dataframe
+        st.dataframe(
+            anomalies_display,
+            use_container_width=True,
+            height=400
+        )
+        
+        # Opción 2: Grid editable con st.data_editor (comentado)
+        # st.data_editor(
+        #     anomalies_display,
+        #     use_container_width=True,
+        #     height=400,
+        #     disabled=True  # Solo lectura
+        # )
+        
+        # Botón para descargar las anomalías
+        csv_data = anomalies_display.to_csv(index=False)
+        st.download_button(
+            label="📥 Descargar Anomalías (CSV)",
+            data=csv_data,
+            file_name="anomalias_detectadas.csv",
+            mime="text/csv"
+        )
+        
+    else:
+        st.info("No se detectaron anomalías en los datos.")
+
 
 # Configuración de la página
 st.set_page_config(
@@ -344,6 +424,10 @@ if uploaded_file is not None:
                     output_dir=temp_output_dir,
                     errors_file="parsing_errors.txt"
                 )
+               
+                print('DF recien leido:')
+                print(df.shape)
+                
             
             # Limpiar archivo temporal
             os.unlink(temp_logfile_path)
@@ -386,6 +470,10 @@ if 'data' in st.session_state:
     if st.sidebar.button("Procesar Datos",type="primary", on_click=toggle_state_data_processed):
         with st.spinner("Procesando datos..."):
             df_transformed=transform_data(df)
+            print ('Data Transformed: ')
+            print (df_transformed.shape)
+            
+
             st.session_state['data_transformed'] = df_transformed
         
         toggle_state_data_processed()
@@ -463,6 +551,7 @@ if 'data' in st.session_state:
     # Botón para entrenar modelo
     if st.sidebar.button("Entrenar Modelo", type="secondary"):
         with st.spinner("Entrenando modelo..."):
+            
             df=st.session_state['data_transformed']
             
             print (df.shape)
@@ -482,6 +571,7 @@ if 'data' in st.session_state:
                 st.session_state['predictions'] = predictions
                 st.session_state['pca_data'] = pca_data
                 st.session_state['confusion_matrix'] = confusion_matrix
+                
                 
             else:  # K-Means
                 model = KMeansModel()
@@ -541,6 +631,14 @@ if 'data' in st.session_state:
             fig.update_traces(marker=dict(size=8, opacity=0.7))
             fig.update_layout(template="plotly_white")
             st.plotly_chart(fig, use_container_width=True)
+
+            df_original = st.session_state['data']
+            print("Predictions shape:")
+            print(predictions.shape)
+            print("original shape:")
+            print(df_original.shape)
+
+            show_anomalies_grid(df_original,predictions)
             
         else:  # K-Means
             cluster_labels = st.session_state['cluster_labels']

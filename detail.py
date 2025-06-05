@@ -17,8 +17,8 @@ def main():
     session_min =20
     transformer = DataTransformer(token=IPINFO_TOKEN,cache_file=CACHE_FILE,session_minutes=session_min)
 
-    df = reader.logs_to_df(logfile='./data/logs_10k.log', output_dir='temp_dir/', errors_file='errors.txt')
-
+    df = reader.logs_to_df(logfile='./data/logs_50M.log', output_dir='temp_dir/', errors_file='errors.txt')
+    
     print("--------------------------------------------------------------------------------")
     print ("Transform Data:")
     #Transformación de datos:
@@ -27,6 +27,9 @@ def main():
     # - añadir session_global_id: identificador de sesiones en un rango de tiempo. (peticiones desde una misma IP en un rango definido)
     # - añadir datetime_delta_ms_in_session: tiempo entre request de una misma sesión.
     # - añadir request_len y referer_len : longitud de la petición y el referer de la petición.
+    # - añadir flag que indica si la request contiene comandos típicos de SO que pueden indicar ataque.
+    # - añadir flag que indica si la request contiene caracteres Hexadecimales
+    # - añadir columna con conteo de caracteres extraños para una URL
     
     transformed_df = transformer.transform_add_countrycode(df,"client","country_code" )
     
@@ -36,6 +39,14 @@ def main():
 
     transformed_df = transformer.transform_add_length_columns (transformed_df,['request','referer'])
     
+    transformed_df = transformer.transform_add_os_command_flag(transformed_df,['raw_request'])
+
+    transformed_df = transformer.transform_add_hex_flag(transformed_df,['raw_request'])
+
+    transformed_df = transformer.transform_add_weird_char_freq(transformed_df,['raw_request'])
+
+    print (transformed_df.info())
+
     #Limpieza de datos: 
     # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
     # - eliminar userid
@@ -56,7 +67,7 @@ def main():
     print("--------------------------------------------------------------------------------")
     print ("Normalize Data:")
     #Normalizar valores numéricos:
-    normalized_df = transformer.transform_normalize (cleaned_df,['datetime_delta_ms','datetime_delta_ms_in_session','size_in_bytes'])
+    normalized_df = transformer.transform_normalize (cleaned_df,['datetime_delta_ms','datetime_delta_ms_in_session','size_in_bytes','raw_request_weird_char_freq','raw_request_has_hex','raw_request_has_os_command'])
 
     #OneHotEncoder sobre categoricas de baja cardinalidad
     normalized_df = transformer.transform_one_hot_encoder(normalized_df,['method','status'])
@@ -70,8 +81,11 @@ def main():
     sparseMatrix_referer, v3 = transformer.transform_vectorize_url(normalized_df,'referer')
     print("informacion de referer: ")
     print(sparseMatrix_referer.shape)
+    sparseMatrix_rawRequest, v4 = transformer.transform_vectorize_raw_request(normalized_df,'raw_request')
+    print("informacion de raw_request:")
+    print(sparseMatrix_rawRequest.shape)
 
-    final_df = transformer.transform_combine_numeric_and_sparse(normalized_df,[sparseMatrix_user_agent,sparseMatrix_referer,sparseMatrix_request])
+    final_df = transformer.transform_combine_numeric_and_sparse(normalized_df,[sparseMatrix_rawRequest,sparseMatrix_user_agent,sparseMatrix_referer,sparseMatrix_request])
     
     print("DF final shape: " )
     print(final_df.shape)

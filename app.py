@@ -18,31 +18,19 @@ import io
 from DataCLFReader import DataCLFReader
 from DataTransformer import DataTransformer
 from DataCleaner import DataCleaner
+from AIModelInterface import AIModelInterface
 import time
 from dotenv import load_dotenv
 from settings import IPINFO_TOKEN, CACHE_FILE
 
-
+#**********************************************************************************************
+#                               VARIABLES GLOBALES
+#**********************************************************************************************
 SESSION_MIN =20
 
-# Implementación de la interfaz AIModelInterface
-class AIModelInterface(ABC):
-    @abstractmethod
-    def train_model(self, data, trainParams):
-        pass
-    
-    @abstractmethod
-    def save_model(self, modelName):
-        pass
-    
-    @abstractmethod
-    def load_model(self, modelName):
-        pass
-    
-    @abstractmethod
-    def test_model(self, data):
-        pass
-
+#**********************************************************************************************
+#                MODELOS IMPLEMENTADOS Y FUNC. AUXILIARES DE LOS MODELOS
+#**********************************************************************************************
 # Implementación para Isolation Forest
 class IsolationForestModel(AIModelInterface):
     def __init__(self):
@@ -113,7 +101,6 @@ class IsolationForestModel(AIModelInterface):
         pca_data = self.pca.transform(scaled_data)
         
         return predictions, scores, pca_data
-
 # Implementación para K-Means
 class KMeansModel(AIModelInterface):
     def __init__(self):
@@ -196,7 +183,6 @@ class KMeansModel(AIModelInterface):
         min_distances = np.min(distances, axis=1)
         
         return cluster_labels, min_distances, pca_data
-
 # Función para calcular método del codo para K-Means
 def calculate_elbow_method(data, max_k=10):
     scaled_data = StandardScaler().fit_transform(data)
@@ -209,8 +195,7 @@ def calculate_elbow_method(data, max_k=10):
         inertias.append(kmeans.inertia_)
     
     return k_range, inertias
-
-
+# Funciones de limpieza y transformación de los datos originales
 def clean_data(data:pd.DataFrame)->pd.DataFrame:
       
     # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
@@ -219,7 +204,6 @@ def clean_data(data:pd.DataFrame)->pd.DataFrame:
     cleaned_df = cleaner.delete_rows_with_faulting_category(data)
     print(cleaned_df.shape)
     return cleaned_df
-
 def transform_data(data:pd.DataFrame)->pd.DataFrame:
    transformer = DataTransformer(token=IPINFO_TOKEN,cache_file=CACHE_FILE,session_minutes=SESSION_MIN)
    cleaner = DataCleaner()
@@ -240,7 +224,8 @@ def transform_data(data:pd.DataFrame)->pd.DataFrame:
    transformed_df = transformer.transform_add_os_command_flag(transformed_df,['raw_request'])    
    transformed_df = transformer.transform_add_hex_flag(transformed_df,['raw_request'])
    transformed_df = transformer.transform_add_weird_char_freq(transformed_df,['raw_request'])
- 
+
+    # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
     # - eliminar userid
     # - eliminar client (ip) 
    cleaned_df = cleaner.delete_rows_with_faulting_category(transformed_df)
@@ -266,10 +251,13 @@ def transform_data(data:pd.DataFrame)->pd.DataFrame:
    #Establece todos los nombres de columnas de tipo String.
    final_df.columns = final_df.columns.astype(str) 
    return final_df
-   
-def toggle_state_data_processed():
-    st.session_state['data_processed'] = not st.session_state['data_processed'] 
 
+#**********************************************************************************************
+#                              FUNCIONES AUX. DE LA UI
+#********************************************************************************************** 
+#Funciones de visualización en UI
+def toggle_state_data_processed_flag():
+    st.session_state['data_processed_flag'] = not st.session_state['data_processed_flag'] 
 def render_dataframe_sample(df:pd.DataFrame):
 
     df_dense = df.copy()
@@ -288,7 +276,6 @@ def render_dataframe_sample(df:pd.DataFrame):
     with col2:
         st.subheader("Estadísticas Básicas")
         st.dataframe(df_dense.describe())
-
 def show_anomalies_grid(original_df, predictions):
     """
     Muestra los registros originales donde se detectaron anomalías
@@ -352,8 +339,15 @@ def show_anomalies_grid(original_df, predictions):
         
     else:
         st.info("No se detectaron anomalías en los datos.")
+def clean_ui():
+    print('Atención: LIMPIANDO DATOS DE SESION')
+    st.session_state['data_procesed']=False
+    st.session_state.pop('data_transformed',None)
+    st.session_state.pop('model',None)
 
-
+#**********************************************************************************************
+#                                RENDERIZADO DE LA UI
+#**********************************************************************************************
 # Configuración de la página
 st.set_page_config(
     page_title="Detección de Anomalías en Logs",
@@ -361,12 +355,11 @@ st.set_page_config(
     layout="wide"
 )
 
-
-if 'data_processed' not in st.session_state:
-    st.session_state['data_processed'] = False
+if 'data_processed_flag' not in st.session_state:
+    st.session_state['data_processed_flag'] = False
 
 # Título principal
-st.title(f"🔍 Detección de Anomalías en Logs de Servidores Web (data_processed={st.session_state['data_processed']})")
+st.title(f"🔍 Detección de Anomalías en Logs de Servidores Web (data_processed_flag={st.session_state['data_processed_flag']})")
 st.markdown("---")
 
 # Sidebar para configuración
@@ -374,7 +367,9 @@ st.sidebar.header("Configuración")
 
 # Carga de datos
 st.sidebar.subheader("Cargar Datos")
-uploaded_file = st.sidebar.file_uploader("Subir archivo de logs (.log) en formato CLF", type=['log'],help="Selecciona un fichero log en formato CLF")
+uploaded_file = st.sidebar.file_uploader("Subir archivo de logs (.log) en formato CLF", type=['log'],
+                                         help="Selecciona un fichero log en formato CLF",
+                                        )
 
 # Generar datos de ejemplo si no se carga archivo
 if uploaded_file is None:
@@ -462,21 +457,20 @@ if uploaded_file is not None:
 # Mostrar datos si están disponibles
 if 'data' in st.session_state:
     df = st.session_state['data']
-    
-    if st.session_state['data_processed']==False :
+
+    #Lectura inicial de datos y aun no procesados: visualizo información agregada del
+    #dataset original
+    if st.session_state['data_processed_flag']==False :
         render_dataframe_sample(df)
     
     # Botón para transformar datos:
-    if st.sidebar.button("Procesar Datos",type="primary", on_click=toggle_state_data_processed):
+    if st.sidebar.button("Procesar Datos",type="primary", on_click=toggle_state_data_processed_flag):
         with st.spinner("Procesando datos..."):
             df_transformed=transform_data(df)
             print ('Data Transformed: ')
             print (df_transformed.shape)
-            
-
             st.session_state['data_transformed'] = df_transformed
-        
-        toggle_state_data_processed()
+
         render_dataframe_sample(st.session_state['data_transformed'])
         
 
@@ -549,7 +543,7 @@ if 'data' in st.session_state:
         }
 
     # Botón para entrenar modelo
-    if st.sidebar.button("Entrenar Modelo", type="secondary"):
+    if st.sidebar.button("Entrenar Modelo", type="secondary") and 'data_transformed' in st.session_state:
         with st.spinner("Entrenando modelo..."):
             
             df=st.session_state['data_transformed']
@@ -725,12 +719,15 @@ else:
 
 
 
-
-
-
 # Información adicional
-with st.expander("ℹ️ Información sobre los Algoritmos"):
+with st.expander("ℹ️ Información adicioanl sobre los Algoritmos"):
     st.markdown("""
+    ### Autores
+    - **Bryan Silva** - bryannsilva3@gmail.com 
+    - **Julio González** - isc.julio.gonzalez@gmail.com 
+    - **Armando Sánchez** -  armandosanchezperez1986@gmail.com 
+    - **Salvador Galiano** - salvador.galiano@gmail.com 
+    ## Modelos implementados:
     ### Isolation Forest
     - **Uso**: Detección de anomalías no supervisada
     - **Principio**: Aísla anomalías mediante particionamiento aleatorio

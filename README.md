@@ -11,6 +11,7 @@ Previous:
 
 2. Require .env with the following env.var:
    - IPINFO_TOKEN=<token of ipinfo.io>
+   - CACHE_FILE="<name_of_file_for_caching>.json"
    
 3. Run de example app: uv run main.py
 

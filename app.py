@@ -196,13 +196,12 @@ def calculate_elbow_method(data, max_k=10):
     
     return k_range, inertias
 # Funciones de limpieza y transformación de los datos originales
-def clean_data(data:pd.DataFrame)->pd.DataFrame:
-      
+def clean_data(data:pd.DataFrame)->pd.DataFrame:      
     # - eliminar filas con datos faltantes: en el proceso de lectura ya se realiza.
     cleaner = DataCleaner()
-    print(data.shape)
+    #print(data.shape)
     cleaned_df = cleaner.delete_rows_with_faulting_category(data)
-    print(cleaned_df.shape)
+    #print(cleaned_df.shape)
     return cleaned_df
 def transform_data(data:pd.DataFrame)->pd.DataFrame:
    transformer = DataTransformer(token=IPINFO_TOKEN,cache_file=CACHE_FILE,session_minutes=SESSION_MIN)
@@ -257,9 +256,10 @@ def transform_data(data:pd.DataFrame)->pd.DataFrame:
 #********************************************************************************************** 
 #Funciones de visualización en UI
 def toggle_state_data_processed_flag():
+    print(f"-[toggle_state_data_processed_flag] changing flag: data_processed_flag to: {not st.session_state['data_processed_flag']}")
     st.session_state['data_processed_flag'] = not st.session_state['data_processed_flag'] 
 def render_dataframe_sample(df:pd.DataFrame):
-
+    print(f"- [render_dataframe_sample] printing loaded data (procesed={st.session_state["data_processed_flag"]})")
     df_dense = df.copy()
     
     # Convierte columnas sparse a densas
@@ -284,7 +284,7 @@ def show_anomalies_grid(original_df, predictions):
         original_df: DataFrame original con todos los datos
         predictions: Array con las predicciones (-1 para anomalías, 1 para normales)
     """
-    
+    print("-[show_anomalies_grid] UI printing Grid with anomalies")
     # Crear una copia del DataFrame original
     df_with_predictions = original_df.copy()
     
@@ -340,7 +340,7 @@ def show_anomalies_grid(original_df, predictions):
     else:
         st.info("No se detectaron anomalías en los datos.")
 def clean_ui():
-    print('Atención: LIMPIANDO DATOS DE SESION')
+    print('[clean_ui] Atención: LIMPIANDO DATOS DE SESION')
     st.session_state['data_procesed']=False
     st.session_state.pop('data_transformed',None)
     st.session_state.pop('model',None)
@@ -348,6 +348,13 @@ def clean_ui():
 #**********************************************************************************************
 #                                RENDERIZADO DE LA UI
 #**********************************************************************************************
+if 'render_count' not in st.session_state:
+    st.session_state.render_count = 0
+print("...................................................................................")
+print(f"                               RENDERING:UI [{st.session_state.render_count}]")
+print("...................................................................................")
+st.session_state.render_count+=1
+
 # Configuración de la página
 st.set_page_config(
     page_title="Detección de Anomalías en Logs",
@@ -467,10 +474,11 @@ if 'data' in st.session_state:
     if st.sidebar.button("Procesar Datos",type="primary", on_click=toggle_state_data_processed_flag):
         with st.spinner("Procesando datos..."):
             df_transformed=transform_data(df)
-            print ('Data Transformed: ')
-            print (df_transformed.shape)
+            #print ('Data Transformed: ')
+            #print (df_transformed.shape)
             st.session_state['data_transformed'] = df_transformed
-
+    
+    if st.session_state.data_processed_flag==True and 'data_transformed' in st.session_state and not st.session_state.data_transformed.empty:
         render_dataframe_sample(st.session_state['data_transformed'])
         
 
@@ -486,10 +494,10 @@ if 'data' in st.session_state:
     if algorithm == "Isolation Forest":
         contamination = st.sidebar.slider(
             "Contaminación (% de anomalías esperadas)",
-            min_value=0.01,
+            min_value=0.001,
             max_value=0.5,
             value=0.1,
-            step=0.01
+            step=0.001
         )
         
         n_estimators = st.sidebar.slider(
@@ -548,14 +556,8 @@ if 'data' in st.session_state:
             
             df=st.session_state['data_transformed']
             
-            print (df.shape)
-            print (df.info())
-
             # Seleccionar solo columnas numéricas
             numeric_df = df.select_dtypes(include=[np.number])
-            
-            print (numeric_df.shape)
-            print (numeric_df.info())
             
             if algorithm == "Isolation Forest":
                 model = IsolationForestModel()
@@ -627,10 +629,6 @@ if 'data' in st.session_state:
             st.plotly_chart(fig, use_container_width=True)
 
             df_original = st.session_state['data']
-            print("Predictions shape:")
-            print(predictions.shape)
-            print("original shape:")
-            print(df_original.shape)
 
             show_anomalies_grid(df_original,predictions)
             
@@ -720,7 +718,7 @@ else:
 
 
 # Información adicional
-with st.expander("ℹ️ Información adicioanl sobre los Algoritmos"):
+with st.expander("ℹ️ Información adicional"):
     st.markdown("""
     ### Autores
     - **Bryan Silva** - bryannsilva3@gmail.com 

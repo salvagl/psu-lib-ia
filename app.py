@@ -9,7 +9,6 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
-import pickle
 import os
 import tempfile
 from abc import ABC, abstractmethod
@@ -18,10 +17,9 @@ import io
 from DataCLFReader import DataCLFReader
 from DataTransformer import DataTransformer
 from DataCleaner import DataCleaner
-from AIModelInterface import AIModelInterface
-import time
 from dotenv import load_dotenv
 from settings import IPINFO_TOKEN, CACHE_FILE
+from AIlibrary import KMeansModel,IsolationForestModel
 
 #**********************************************************************************************
 #                               VARIABLES GLOBALES
@@ -29,160 +27,8 @@ from settings import IPINFO_TOKEN, CACHE_FILE
 SESSION_MIN =20
 
 #**********************************************************************************************
-#                MODELOS IMPLEMENTADOS Y FUNC. AUXILIARES DE LOS MODELOS
+#                         FUNC. AUXILIARES DE LOS MODELOS
 #**********************************************************************************************
-# Implementación para Isolation Forest
-class IsolationForestModel(AIModelInterface):
-    def __init__(self):
-        self.model = None
-        self.scaler = StandardScaler()
-        self.pca = PCA(n_components=2)
-        
-    def train_model(self, data, trainParams):
-        # Escalar datos
-        scaled_data = self.scaler.fit_transform(data)
-        
-        # Entrenar modelo
-        self.model = IsolationForest(
-            contamination=trainParams.get('contamination', 0.1),
-            n_estimators=trainParams.get('n_estimators', 100),
-            random_state=42
-        )
-        
-        predictions = self.model.fit_predict(scaled_data)
-        
-        # PCA para visualización
-        pca_data = self.pca.fit_transform(scaled_data)
-        
-        # Calcular métricas
-        anomaly_count = np.sum(predictions == -1)
-        normal_count = np.sum(predictions == 1)
-        
-        confusion_matrix = {
-            'anomalies': anomaly_count,
-            'normal': normal_count,
-            'contamination_rate': anomaly_count / len(predictions)
-        }
-        
-        return confusion_matrix, predictions, pca_data
-    
-    def save_model(self, modelName):
-        model_data = {
-            'model': self.model,
-            'scaler': self.scaler,
-            'pca': self.pca
-        }
-        
-        if not os.path.exists('models'):
-            os.makedirs('models')
-            
-        path = f'models/{modelName}_isolation_forest.pkl'
-        with open(path, 'wb') as f:
-            pickle.dump(model_data, f)
-        return path
-    
-    def load_model(self, modelName):
-        path = f'models/{modelName}_isolation_forest.pkl'
-        with open(path, 'rb') as f:
-            model_data = pickle.load(f)
-        
-        self.model = model_data['model']
-        self.scaler = model_data['scaler']
-        self.pca = model_data['pca']
-        return self.model
-    
-    def test_model(self, data):
-        if self.model is None:
-            raise ValueError("Modelo no entrenado")
-        
-        scaled_data = self.scaler.transform(data)
-        predictions = self.model.predict(scaled_data)
-        scores = self.model.decision_function(scaled_data)
-        pca_data = self.pca.transform(scaled_data)
-        
-        return predictions, scores, pca_data
-# Implementación para K-Means
-class KMeansModel(AIModelInterface):
-    def __init__(self):
-        self.model = None
-        self.scaler = StandardScaler()
-        self.pca = PCA(n_components=2)
-        
-    def train_model(self, data, trainParams):
-        # Escalar datos
-        scaled_data = self.scaler.fit_transform(data)
-        
-        # Entrenar modelo
-        k = trainParams.get('n_clusters', 8)
-        self.model = KMeans(
-            n_clusters=k,
-            random_state=42,
-            n_init=10
-        )
-        
-        cluster_labels = self.model.fit_predict(scaled_data)
-        
-        # PCA para visualización
-        pca_data = self.pca.fit_transform(scaled_data)
-        
-        # Calcular métricas
-        inertia = self.model.inertia_
-        silhouette_avg = silhouette_score(scaled_data, cluster_labels)
-        
-        # Detectar anomalías basándose en distancia a centroides
-        distances = self.model.transform(scaled_data)
-        min_distances = np.min(distances, axis=1)
-        threshold = np.percentile(min_distances, 90)  # Top 10% como anomalías
-        anomalies = min_distances > threshold
-        
-        confusion_matrix = {
-            'inertia': inertia,
-            'silhouette_score': silhouette_avg,
-            'n_clusters': k,
-            'anomalies': np.sum(anomalies),
-            'normal': len(anomalies) - np.sum(anomalies)
-        }
-        
-        return confusion_matrix, cluster_labels, pca_data, anomalies, min_distances
-    
-    def save_model(self, modelName):
-        model_data = {
-            'model': self.model,
-            'scaler': self.scaler,
-            'pca': self.pca
-        }
-        
-        if not os.path.exists('models'):
-            os.makedirs('models')
-            
-        path = f'models/{modelName}_kmeans.pkl'
-        with open(path, 'wb') as f:
-            pickle.dump(model_data, f)
-        return path
-    
-    def load_model(self, modelName):
-        path = f'models/{modelName}_kmeans.pkl'
-        with open(path, 'rb') as f:
-            model_data = pickle.load(f)
-        
-        self.model = model_data['model']
-        self.scaler = model_data['scaler']
-        self.pca = model_data['pca']
-        return self.model
-    
-    def test_model(self, data):
-        if self.model is None:
-            raise ValueError("Modelo no entrenado")
-        
-        scaled_data = self.scaler.transform(data)
-        cluster_labels = self.model.predict(scaled_data)
-        pca_data = self.pca.transform(scaled_data)
-        
-        # Calcular distancias para detección de anomalías
-        distances = self.model.transform(scaled_data)
-        min_distances = np.min(distances, axis=1)
-        
-        return cluster_labels, min_distances, pca_data
 # Función para calcular método del codo para K-Means
 def calculate_elbow_method(data, max_k=10):
     scaled_data = StandardScaler().fit_transform(data)
@@ -341,7 +187,7 @@ def show_anomalies_grid(original_df, predictions):
         st.info("No se detectaron anomalías en los datos.")
 def clean_ui():
     print('[clean_ui] Atención: LIMPIANDO DATOS DE SESION')
-    st.session_state['data_procesed']=False
+    st.session_state['data_processed_flag']=False
     st.session_state.pop('data_transformed',None)
     st.session_state.pop('model',None)
 
@@ -353,6 +199,7 @@ if 'render_count' not in st.session_state:
 print("...................................................................................")
 print(f"                               RENDERING:UI [{st.session_state.render_count}]")
 print("...................................................................................")
+
 st.session_state.render_count+=1
 
 # Configuración de la página
@@ -405,82 +252,92 @@ if uploaded_file is None:
         st.session_state['data'] = df
         st.sidebar.success("Datos de ejemplo generados!")
 
-# Procesar datos cargados
+# Leer datos del fichero de logs seleccionado
 if uploaded_file is not None:
-    try:
-        # Crear archivo temporal para guardar el log
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.log') as temp_file:
-            temp_file.write(uploaded_file.getvalue())
-            temp_logfile_path = temp_file.name
-        
-        # Crear directorios temporales para salida y errores
-        with tempfile.TemporaryDirectory() as temp_output_dir:
-            temp_errors_file = os.path.join(temp_output_dir, 'parsing_errors.txt')
-            
-            # Instanciar el lector CLF y procesar el archivo
-            clf_reader = DataCLFReader()
-            
-            with st.spinner("Procesando archivo de logs CLF..."):
-                df = clf_reader.logs_to_df(
-                    logfile=temp_logfile_path,
-                    output_dir=temp_output_dir,
-                    errors_file="parsing_errors.txt"
-                )
-               
-                print('DF recien leido:')
-                print(df.shape)
-                
-            
-            # Limpiar archivo temporal
-            os.unlink(temp_logfile_path)
-            
-            if df is not None and not df.empty:
-                st.session_state['data'] = df
-                st.sidebar.success(f"Registros de logs cargados: {len(df)} ")
-                
-                # Mostrar información sobre errores de parsing si existen
-                if os.path.exists(temp_errors_file):
-                    try:
-                        with open(temp_errors_file, 'r') as f:
-                            errors_content = f.read().strip()
-                        if errors_content:
-                            st.sidebar.warning(f"Se encontraron algunos errores de parsing. Revisa el archivo de errores.")
-                            with st.sidebar.expander("Ver errores de parsing"):
-                                st.text(errors_content)
-                    except:
-                        pass
-            else:
-                st.sidebar.error("No se pudieron procesar los logs. Verifica que el archivo tenga formato CLF válido.")
-                
-    except Exception as e:
-        st.sidebar.error(f"Error al procesar el archivo: {str(e)}")
-        # Limpiar archivo temporal en caso de error
+
+    if not "file_read" in st.session_state or st.session_state.file_read != uploaded_file.name:
         try:
-            if 'temp_logfile_path' in locals():
+            # Crear archivo temporal para guardar el log
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.log') as temp_file:
+                temp_file.write(uploaded_file.getvalue())
+                temp_logfile_path = temp_file.name
+            
+            # Crear directorios temporales para salida y errores
+            with tempfile.TemporaryDirectory() as temp_output_dir:
+                temp_errors_file = os.path.join(temp_output_dir, 'parsing_errors.txt')
+                
+                # Instanciar el lector CLF y procesar el archivo
+                clf_reader = DataCLFReader()
+                
+                with st.spinner("Leyendo archivo de logs CLF..."):
+                    df = clf_reader.logs_to_df(
+                        logfile=temp_logfile_path,
+                        output_dir=temp_output_dir,
+                        errors_file="parsing_errors.txt"
+                    )
+                
+                    print('DF recien leido:')
+                    print(df.shape)
+                    
+                
+                # Limpiar archivo temporal
                 os.unlink(temp_logfile_path)
-        except:
-            pass
+                
+                if df is not None and not df.empty:
+                    st.session_state['data'] = df
+                    st.sidebar.success(f"Registros de logs cargados: {len(df)} ")
+                    
+                    # Mostrar información sobre errores de parsing si existen
+                    if os.path.exists(temp_errors_file):
+                        try:
+                            with open(temp_errors_file, 'r') as f:
+                                errors_content = f.read().strip()
+                            if errors_content:
+                                st.sidebar.warning(f"Se encontraron algunos errores de parsing. Revisa el archivo de errores.")
+                                with st.sidebar.expander("Ver errores de parsing"):
+                                    st.text(errors_content)
+                        except:
+                            pass
+                    #En cada lectura correcta de fichero de logs se deben resetear 
+                    #var. de sessión que controlan la visualización de datos y modelos.
+                    clean_ui()
+                    st.session_state.file_read=uploaded_file.name
+                    print (f"- en session_state: {uploaded_file.name}")
+                else:
+                    st.sidebar.error("No se pudo leer el fichero de logs. Verifica que el archivo tenga formato CLF válido.")
+                    
+        except Exception as e:
+            st.sidebar.error(f"Error al procesar el archivo: {str(e)}")
+            # Limpiar archivo temporal en caso de error
+            try:
+                if 'temp_logfile_path' in locals():
+                    os.unlink(temp_logfile_path)
+            except:
+                pass
 
 # Mostrar datos si están disponibles
 if 'data' in st.session_state:
     df = st.session_state['data']
-
-    #Lectura inicial de datos y aun no procesados: visualizo información agregada del
-    #dataset original
-    if st.session_state['data_processed_flag']==False :
-        render_dataframe_sample(df)
     
     # Botón para transformar datos:
-    if st.sidebar.button("Procesar Datos",type="primary", on_click=toggle_state_data_processed_flag):
+    if st.sidebar.button("Procesar Datos",type="primary"):
         with st.spinner("Procesando datos..."):
             df_transformed=transform_data(df)
             #print ('Data Transformed: ')
             #print (df_transformed.shape)
             st.session_state['data_transformed'] = df_transformed
-    
+            st.session_state.data_processed_flag=True
+
+    #Datos procesados: visualizo información agregada del dataset transformado
     if st.session_state.data_processed_flag==True and 'data_transformed' in st.session_state and not st.session_state.data_transformed.empty:
+        st.subheader("Datos procesados:")
         render_dataframe_sample(st.session_state['data_transformed'])
-        
+
+    #Lectura inicial de datos y aun no procesados: visualizo información agregada del
+    #dataset original
+    if st.session_state.data_processed_flag==False :
+        st.subheader("Datos originales:")
+        render_dataframe_sample(df)   
 
     # Selección de algoritmo
     algorithm = st.sidebar.selectbox(

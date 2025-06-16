@@ -11,20 +11,7 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 import os
 import tempfile
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Tuple
-import io
-from DataCLFReader import DataCLFReader
-from DataTransformer import DataTransformer
-from DataCleaner import DataCleaner
-from dotenv import load_dotenv
-from settings import IPINFO_TOKEN, CACHE_FILE
-from AIlibrary import KMeansModel,IsolationForestModel
-
-#**********************************************************************************************
-#                               VARIABLES GLOBALES
-#**********************************************************************************************
-SESSION_MIN =20
+from AIlibrary import KMeansModel,IsolationForestModel,DataTransformer,DataCleaner,DataCLFReader,IPINFO_TOKEN, CACHE_FILE,SESSION_MIN
 
 #**********************************************************************************************
 #                         FUNC. AUXILIARES DE LOS MODELOS
@@ -78,7 +65,7 @@ def transform_data(data:pd.DataFrame)->pd.DataFrame:
    cleaned_df = cleaner.delete_column (cleaned_df,'client')
 
    #Normalizar valores numéricos:
-   normalized_df = transformer.transform_normalize (cleaned_df,['datetime_delta_ms','datetime_delta_ms_in_session','size_in_bytes'])   
+   normalized_df = transformer.transform_normalize (cleaned_df,['datetime_delta_ms','datetime_delta_ms_in_session','size_in_bytes','raw_request_weird_char_freq'])   
    
    #OneHotEncoder sobre categoricas de baja cardinalidad: +interpretabilidad
    normalized_df = transformer.transform_one_hot_encoder(normalized_df,['method','status'])

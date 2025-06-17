@@ -493,6 +493,12 @@ class DataTransformer:
             self.ip_cache[ip] = 'Error'
             return 'Error'
 
+    def replace_negative_with_mean(self,X):
+        X_flat = X.flatten()
+        non_negative = X_flat[X_flat >= 0]
+        mean_val = np.mean(non_negative) if len(non_negative) > 0 else 0
+        return np.where(X_flat < 0, mean_val, X_flat).reshape(-1, 1)
+    
     def transform_add_countrycode(self, df: pd.DataFrame, ip_col: str = 'ip', new_col: str = 'country_code') -> pd.DataFrame:
         """
         Aplica la geolocalización a todas las IPs en el DataFrame.
@@ -1394,7 +1400,12 @@ class PandasCompatibleTfidfVectorizer(BaseEstimator, TransformerMixin):
         if self.output_transform == "pandas":
             if hasattr(result, 'toarray'):
                 result = result.toarray()
-            feature_names = self.vectorizer_.get_feature_names_out()
+            feature_names = self.get_feature_names_out(self.vectorizer_.get_feature_names_out())
+            # print(f"Feature_names len: {len(feature_names)}")
+            # print(f"Feature_names top-10:{feature_names[:20]}")
+            # print(f"Feature_namesXX len: {len(self.get_feature_names_out(feature_names))}")
+            # print(f"Feature_namesXX top-10:{self.get_feature_names_out(feature_names)[:20]}")
+
             return pd.DataFrame(result, columns=feature_names)
         
         return result
@@ -1404,7 +1415,8 @@ class PandasCompatibleTfidfVectorizer(BaseEstimator, TransformerMixin):
     
     def get_feature_names_out(self, input_features=None):
         check_is_fitted(self.vectorizer_)
-        return self.vectorizer_.get_feature_names_out(input_features)
+        return [f'TfIdf_voc{i}' for i in range(len(input_features))]
+        #return self.vectorizer_.get_feature_names_out(input_features)
     
     @property
     def vocabulary_(self):
@@ -1666,14 +1678,18 @@ class PandasCompatibleHashingVectorizer(BaseEstimator, TransformerMixin):
     
     def transform(self, X):
         """Transform que devuelve DataFrame si se configuró pandas output"""
-        
+        feature_name=''
         # Convertir DataFrame/Series a formato adecuado para HashingVectorizer
         if isinstance(X, pd.DataFrame):
+            
             # Si es DataFrame, tomar la primera columna si solo hay una
             if X.shape[1] == 1:
+                feature_name=X.columns[0]
                 X = X.iloc[:, 0]
+                
             else:
                 # Si hay múltiples columnas, concatenarlas
+                feature_name=X.columns.apply(lambda col: ' '.join(col.astype(str)), axis=1 )
                 X = X.apply(lambda row: ' '.join(row.astype(str)), axis=1)
         
         # Aplicar la transformación del HashingVectorizer
@@ -1687,7 +1703,7 @@ class PandasCompatibleHashingVectorizer(BaseEstimator, TransformerMixin):
             
             # Crear nombres de columnas
             n_cols = result.shape[1]
-            column_names = [f"hash_{i}" for i in range(n_cols)]
+            column_names = [f"hash_{feature_name}_{i}" for i in range(n_cols)]
             
             return pd.DataFrame(result, columns=column_names)
         

@@ -30,7 +30,7 @@ def main2():
 
     df = reader.logs_to_df(logfile='./data/logs_10k.log', output_dir='temp_dir/', errors_file='errors.txt')
     print (df.shape)
-    print (df)
+    print (f"Describe:\n {df.describe()}")
     #lectura desde directorio de ficheros parquet: 
     #logs_df = pd.read_parquet('df_dir/')
     
@@ -51,7 +51,7 @@ def main2():
         ("t09", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['request']),  
         ("t10", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['referer']),               #tokenizado por "/"
         ("t11", PandasCompatibleCountVectorizer(token_pattern=r'\b\w+\b',max_features=100,output_transform="pandas"),['user_agent']),                 #tokenizado por palabra
-        # ("t12", PandasCompatibleTfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200,output_transform="pandas"), ['raw_request'])  #tokenizado por datagramas entre 3 y 6 char para detectar patrones de comandos
+        ("t12", PandasCompatibleTfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200,output_transform="pandas"), ['raw_request'])  #tokenizado por datagramas entre 3 y 6 char para detectar patrones de comandos
     ], remainder='passthrough', verbose_feature_names_out=True)
     transformation.set_output(transform="pandas")
     preprocessed_data = transformation.fit_transform(df)

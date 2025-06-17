@@ -16,11 +16,13 @@ from tqdm.auto import tqdm
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import FunctionTransformer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction import FeatureHasher
 from sklearn.feature_extraction.text import TfidfVectorizer,HashingVectorizer
 from sklearn.base import BaseEstimator,TransformerMixin
 from sklearn.utils.validation import check_array, check_is_fitted
+from sklearn.pipeline import Pipeline
 
 from scipy.sparse import hstack
 from abc import ABC, abstractmethod
@@ -493,6 +495,9 @@ class DataTransformer:
             self.ip_cache[ip] = 'Error'
             return 'Error'
 
+    def apply_log(self, X):
+        return np.log1p(X[:,1])
+    
     def replace_negative_with_mean(self,X):
         X_flat = X.flatten()
         non_negative = X_flat[X_flat >= 0]
@@ -1032,6 +1037,8 @@ class DeltaTimeBetweenDatetimesTransformer(BaseEstimator, TransformerMixin):
         #return np.array(['datetime','datetime_delta_ms'])
         return np.array(['datetime_delta_ms'])        
 class CalculateLengthTransformer(BaseEstimator,TransformerMixin):
+    def __init__(self):
+        self.features_names=None
 
     def fit(self, X, y=None):
         """
@@ -1042,7 +1049,7 @@ class CalculateLengthTransformer(BaseEstimator,TransformerMixin):
             X_array = X.values
         else:
             X_array = check_array(X, dtype=object)
-        
+        self.features_names= X.columns
         self.n_features_in_ = X_array.shape[1]
         return self
     
@@ -1056,6 +1063,7 @@ class CalculateLengthTransformer(BaseEstimator,TransformerMixin):
         # Manejar tanto DataFrames como arrays
         if hasattr(X, 'iloc'):  # Es un DataFrame
             results = []
+            self.features_names=X.columns
             for col_idx in range(X.shape[1]):
                 column_as_series = X.iloc[:, col_idx]
                 lengths = column_as_series.astype(str).apply(len)
@@ -1071,9 +1079,9 @@ class CalculateLengthTransformer(BaseEstimator,TransformerMixin):
         Devuelve los nombres de las características de salida (requerido por sklearn >= 1.0)
         """
         if input_features is None:
-            return np.array([f'length_{i}' for i in range(self.n_features_in_)])
+            return np.array([f'len_{self.features_names[i]}' for i in range(self.n_features_in_)])
         else:
-            return np.array([f'{feature}_length' for feature in input_features])  
+            return np.array([f'{feature}_len' for feature in input_features])  
 class GetInfoSessionTransformer(BaseEstimator,TransformerMixin):
     def __init__(self, session_minutes=20):
         self.session_minutes= session_minutes
@@ -1132,18 +1140,20 @@ class GetInfoSessionTransformer(BaseEstimator,TransformerMixin):
             #Se elimina la columna temporal 'session_id':
             returned_df.drop(columns=['session_id','datetime'],inplace=True)
             
-            return np.concatenate([returned_df['session_global_id'].values.reshape(-1, 1),
-                                   returned_df['datetime_delta_ms_in_session'].values.reshape(-1, 1)]
-                                   , axis=1 )
+            # return np.concatenate([returned_df['session_global_id'].values.reshape(-1, 1),
+            #                        returned_df['datetime_delta_ms_in_session'].values.reshape(-1, 1)]
+            #                        , axis=1 )
+            return returned_df['datetime_delta_ms_in_session'].values.reshape(-1, 1)
         else:  
-            print ("Es array devuelvo None")
             return None
         
     def get_feature_names_out(self, input_features=None):
         """
         Devuelve los nombres de las características de salida (requerido por sklearn >= 1.0)
         """
-        return np.array(['session_global_id','datetime_delta_ms_in_session'])   
+        #return np.array(['session_global_id','datetime_delta_ms_in_session'])   
+        return np.array(['datetime_delta_ms_in_session']) 
+
 class AddOsCommandFlagTransformer(BaseEstimator,TransformerMixin):
     def __init__(self, os_commands:list[str]|None = None):
 
@@ -1342,6 +1352,7 @@ class PandasCompatibleTfidfVectorizer(BaseEstimator, TransformerMixin):
         self.sublinear_tf = sublinear_tf
         
         self.output_transform = output_transform
+        self.feature=None
         
         self.vectorizer_ = TfidfVectorizer(
             input=self.input, encoding=self.encoding, decode_error=self.decode_error,
@@ -1376,9 +1387,11 @@ class PandasCompatibleTfidfVectorizer(BaseEstimator, TransformerMixin):
     
     def fit(self, X, y=None):
         if isinstance(X, pd.DataFrame):
+            self.feature=X.columns[0]
             X = X.iloc[:, 0]  # Extraer la Serie de la única columna
         else:
             X = X.apply(lambda row: ' '.join(row.astype(str)), axis=1) # Si hay múltiples columnas, concatenarlas
+            self.feature=X.columns[0]
         
         self.vectorizer_.fit(X, y)
         return self
@@ -1390,10 +1403,12 @@ class PandasCompatibleTfidfVectorizer(BaseEstimator, TransformerMixin):
         if isinstance(X, pd.DataFrame):
             # Si es DataFrame, tomar la primera columna si solo hay una
             if X.shape[1] == 1:
+                self.feature=X.columns[0]
                 X = X.iloc[:, 0]
             else:
                 # Si hay múltiples columnas, concatenarlas
                 X = X.apply(lambda row: ' '.join(row.astype(str)), axis=1)
+                self.feature=X.columns[0]
         
         result = self.vectorizer_.transform(X)
         
@@ -1401,11 +1416,7 @@ class PandasCompatibleTfidfVectorizer(BaseEstimator, TransformerMixin):
             if hasattr(result, 'toarray'):
                 result = result.toarray()
             feature_names = self.get_feature_names_out(self.vectorizer_.get_feature_names_out())
-            # print(f"Feature_names len: {len(feature_names)}")
-            # print(f"Feature_names top-10:{feature_names[:20]}")
-            # print(f"Feature_namesXX len: {len(self.get_feature_names_out(feature_names))}")
-            # print(f"Feature_namesXX top-10:{self.get_feature_names_out(feature_names)[:20]}")
-
+           
             return pd.DataFrame(result, columns=feature_names)
         
         return result
@@ -1415,7 +1426,7 @@ class PandasCompatibleTfidfVectorizer(BaseEstimator, TransformerMixin):
     
     def get_feature_names_out(self, input_features=None):
         check_is_fitted(self.vectorizer_)
-        return [f'TfIdf_voc{i}' for i in range(len(input_features))]
+        return [f'TfIdf_{self.feature}_{i}' for i in range(len(input_features))]
         #return self.vectorizer_.get_feature_names_out(input_features)
     
     @property
@@ -1455,7 +1466,7 @@ class PandasCompatibleCountVectorizer(BaseEstimator, TransformerMixin):
         
         # Configuración de output
         self.output_transform = output_transform
-        
+        self.feature=None
         # Crear el CountVectorizer interno
         self.vectorizer_ = CountVectorizer(
             input=self.input,
@@ -1497,10 +1508,13 @@ class PandasCompatibleCountVectorizer(BaseEstimator, TransformerMixin):
     
     def fit(self, X, y=None):
         """Fit del CountVectorizer"""
+        
         if isinstance(X, pd.DataFrame):
+            self.feature=X.columns[0]
             X = X.iloc[:, 0]  # Extraer la Serie de la única columna
         else:
             X = X.apply(lambda row: ' '.join(row.astype(str)), axis=1) # Si hay múltiples columnas, concatenarlas
+            self.feature=X.columns[0]
         
         self.vectorizer_.fit(X, y)
         return self
@@ -1513,10 +1527,12 @@ class PandasCompatibleCountVectorizer(BaseEstimator, TransformerMixin):
         if isinstance(X, pd.DataFrame):
             # Si es DataFrame, tomar la primera columna si solo hay una
             if X.shape[1] == 1:
+                self.feature=X.columns[0]
                 X = X.iloc[:, 0]
             else:
                 # Si hay múltiples columnas, concatenarlas
                 X = X.apply(lambda row: ' '.join(row.astype(str)), axis=1)
+                self.feature=X.columns[0]
         
         # Aplicar la transformación del CountVectorizer
         result = self.vectorizer_.transform(X)
@@ -1528,7 +1544,8 @@ class PandasCompatibleCountVectorizer(BaseEstimator, TransformerMixin):
             
             # Usar los nombres de features del vocabulario del CountVectorizer
             # Esto es mejor que usar números porque son más descriptivos
-            feature_names = self.vectorizer_.get_feature_names_out()
+            #feature_names = self.vectorizer_.get_feature_names_out()
+            feature_names = self.get_feature_names_out(self.vectorizer_.get_feature_names_out())
             
             return pd.DataFrame(result, columns=feature_names)
         
@@ -1541,7 +1558,8 @@ class PandasCompatibleCountVectorizer(BaseEstimator, TransformerMixin):
     def get_feature_names_out(self, input_features=None):
         """Método para compatibilidad con sklearn pipelines"""
         check_is_fitted(self.vectorizer_)
-        return self.vectorizer_.get_feature_names_out(input_features)
+        return [f'CV_{self.feature}_{i}' for i in range(len(input_features))]
+        #return self.vectorizer_.get_feature_names_out(input_features)
     
     @property
     def vocabulary_(self):
@@ -1634,7 +1652,8 @@ class PandasCompatibleHashingVectorizer(BaseEstimator, TransformerMixin):
         
         # Configuración de output
         self.output_transform = output_transform
-        
+        self.feature=None
+
         # Crear el HashingVectorizer interno
         self.vectorizer_ = HashingVectorizer(
             n_features=self.n_features,
@@ -1673,6 +1692,7 @@ class PandasCompatibleHashingVectorizer(BaseEstimator, TransformerMixin):
     
     def fit(self, X, y=None):
         """Fit del HashingVectorizer (no hace nada pero es necesario)"""
+        self.feature=X.columns[0]
         self.vectorizer_.fit(X, y)
         return self
     
@@ -1712,3 +1732,27 @@ class PandasCompatibleHashingVectorizer(BaseEstimator, TransformerMixin):
     def fit_transform(self, X, y=None):
         """Fit y transform en un solo paso"""
         return self.fit(X, y).transform(X)
+
+log_transformer = FunctionTransformer(np.log1p, feature_names_out='one-to-one')
+
+COUNTRY_CODE_PIPE = Pipeline([
+        ("country_code", IpAddressToISOCountryCodeTransformer(IPINFO_TOKEN,CACHE_FILE)),
+        ("HashingVectorizer", PandasCompatibleHashingVectorizer(n_features=10, alternate_sign=False,output_transform="pandas"))
+    ])
+
+NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE = Pipeline([
+    ("delta",DeltaTimeBetweenDatetimesTransformer()),
+    ("mixmax", MinMaxScaler())
+])
+
+NORMALIZED_LENGTH_PIPE = Pipeline([
+    ("len",CalculateLengthTransformer()),
+    ("log", log_transformer),
+    ("mixmax", MinMaxScaler())
+])
+
+NORMALIZED_DELTATIME_BETWEEN_REQUEST_IN_SESSION_PIPE = Pipeline([
+    ("delta_session",GetInfoSessionTransformer(SESSION_MIN)),
+    ("log", log_transformer),
+    ("mixmax", MinMaxScaler())
+])

@@ -13,11 +13,11 @@ from sklearn.compose import ColumnTransformer
 from AIlibrary import IpAddressToISOCountryCodeTransformer,DeltaTimeBetweenDatetimesTransformer
 from AIlibrary import CalculateLengthTransformer,GetInfoSessionTransformer,AddOsCommandFlagTransformer,PandasCompatibleHashingVectorizer,PandasCompatibleCountVectorizer
 from AIlibrary import AddHexadecimalCharactersFlagTransformer,AddWeirdCharactersFrequencyTransformer,PandasCompatibleTfidfVectorizer
+from AIlibrary import COUNTRY_CODE_PIPELINE,NORMALIZED_DELTATIME_BETWEEN_REQUEST
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder,FunctionTransformer
-from sklearn.feature_extraction.text import CountVectorizer,TfidfVectorizer
-from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+
 
 def main2():
     load_dotenv() 
@@ -34,14 +34,13 @@ def main2():
     #lectura desde directorio de ficheros parquet: 
     #logs_df = pd.read_parquet('df_dir/')
     
-    CountryCodePipeline = Pipeline([
-        ("t01", IpAddressToISOCountryCodeTransformer(IPINFO_TOKEN,CACHE_FILE)),
-        ("t13", PandasCompatibleHashingVectorizer(n_features=10, alternate_sign=False,output_transform="pandas"))
-    ])
+    
 
     transformation = ColumnTransformer([
-        ("pipe01",CountryCodePipeline.set_output(transform="pandas"),['client'] ),
-        ("t02", DeltaTimeBetweenDatetimesTransformer(),['datetime']),
+        ("t00", "drop",['userid']),
+        ("pipe01",COUNTRY_CODE_PIPELINE.set_output(transform="pandas"),['client'] ),
+        #("t02", DeltaTimeBetweenDatetimesTransformer(),['datetime']),
+        ("pipe02", NORMALIZED_DELTATIME_BETWEEN_REQUEST,['datetime'])
         ("t03", CalculateLengthTransformer(),['request','referer']),
         ("t04", GetInfoSessionTransformer(SESSION_MIN),['client','datetime']),
         ("t05", AddOsCommandFlagTransformer(),['raw_request']),
@@ -51,7 +50,7 @@ def main2():
         ("t09", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['request']),  
         ("t10", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['referer']),               #tokenizado por "/"
         ("t11", PandasCompatibleCountVectorizer(token_pattern=r'\b\w+\b',max_features=100,output_transform="pandas"),['user_agent']),                 #tokenizado por palabra
-        ("t12", PandasCompatibleTfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200,output_transform="pandas"), ['raw_request'])  #tokenizado por datagramas entre 3 y 6 char para detectar patrones de comandos
+        ("t12", PandasCompatibleTfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200,output_transform="pandas"), ['raw_request'])  #tokenizado por datagramas entre 3 y 6 char para detectar patrones de comandos    
     ], remainder='passthrough', verbose_feature_names_out=True)
     transformation.set_output(transform="pandas")
     preprocessed_data = transformation.fit_transform(df)

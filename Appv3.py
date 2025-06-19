@@ -385,14 +385,14 @@ def render_training_ui_mode() -> str:
                 df=st.session_state['data']
                 
                 # Seleccionar solo columnas numéricas
-                numeric_df = df.select_dtypes(include=[np.number])
+                #numeric_df = df.select_dtypes(include=[np.number])
                 train_params = st.session_state.train_params
                 print ("********** train_params*************")
                 print (st.session_state.train_params)
 
                 if algorithm == "Isolation Forest":
                     model = IsolationForestModel()
-                    confusion_matrix, predictions, pca_data = model.train_model(numeric_df, train_params)
+                    confusion_matrix, predictions, pca_data = model.train_model(df, train_params)
                     
                     st.session_state['model'] = model
                     st.session_state['predictions'] = predictions
@@ -401,7 +401,7 @@ def render_training_ui_mode() -> str:
                     
                 else:  # K-Means
                     model = KMeansModel()
-                    confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(numeric_df, train_params)
+                    confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(df, train_params)
                     
                     st.session_state['model'] = model
                     st.session_state['cluster_labels'] = cluster_labels

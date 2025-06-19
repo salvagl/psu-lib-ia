@@ -108,6 +108,8 @@ class IsolationForestModel(AIModelInterface):
         
     def train_model(self, data, trainParams):
         # Escalar datos
+        print("Columnas del DataFrame:", data.columns.tolist())
+        print("ColumnTransformer:", self.transformer)
         scaled_data = self.transformer.fit_transform(data)
         
         # Entrenar modelo

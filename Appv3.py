@@ -197,9 +197,10 @@ def load_pretrained_model(selected_model:str, algorithm:str):
             model.load_model(selected_model.replace('_kmeans', ''))
         
         st.session_state['model'] = model
-        st.sidebar.success("Modelo cargado exitosamente!")
+        st.success("Modelo cargado exitosamente!")
     except Exception as e:
-        st.sidebar.error(f"Error al cargar: {str(e)}")
+        st.error(f"Error al cargar: {str(e)}")
+
 def render_training_results_graphic(uiMode:str,algorithm:str):
     print(f"- [render_training_results_graphic] UI Mode: {uiMode}-{algorithm}")
     st.markdown("---")
@@ -369,14 +370,52 @@ def render_prediction_results_graphic(uiMode:str,algorithm:str):
         st.plotly_chart(fig3, use_container_width=True)
 
 def render_training_ui_mode() -> str:
-     # Selección de algoritmo
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Selección de algoritmo
         algorithm = st.selectbox(
             "Seleccionar Algoritmo",
             ["Isolation Forest", "K-Means Clustering"]
-            )
+        )
+        # Botón para entrenar modelo
+        if st.button("Entrenar Modelo", type="primary") and 'data' in st.session_state:
+            with st.spinner("Entrenando modelo..."):
+                
+                df=st.session_state['data']
+                
+                # Seleccionar solo columnas numéricas
+                numeric_df = df.select_dtypes(include=[np.number])
+                train_params = st.session_state.train_params
+                print ("********** train_params*************")
+                print (st.session_state.train_params)
+
+                if algorithm == "Isolation Forest":
+                    model = IsolationForestModel()
+                    confusion_matrix, predictions, pca_data = model.train_model(numeric_df, train_params)
+                    
+                    st.session_state['model'] = model
+                    st.session_state['predictions'] = predictions
+                    st.session_state['pca_data'] = pca_data
+                    st.session_state['confusion_matrix'] = confusion_matrix
+                    
+                else:  # K-Means
+                    model = KMeansModel()
+                    confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(numeric_df, train_params)
+                    
+                    st.session_state['model'] = model
+                    st.session_state['cluster_labels'] = cluster_labels
+                    st.session_state['pca_data'] = pca_data
+                    st.session_state['confusion_matrix'] = confusion_matrix
+                    st.session_state['anomalies'] = anomalies
+                    st.session_state['distances'] = distances
+            
+            st.success("¡Modelo entrenado exitosamente!")
+            st.session_state["result_ready"]=True
+    with col2:
         # Configuración específica del algoritmo
-        st.subheader("Hiperparámetros")
-        
+        st.text("Hiperparámetros")
+    
         if algorithm == "Isolation Forest":
             contamination = st.slider(
                 "Contaminación (% de anomalías esperadas)",
@@ -385,7 +424,7 @@ def render_training_ui_mode() -> str:
                 value=0.1,
                 step=0.001
             )
-            
+        
             n_estimators = st.slider(
                 "Número de Estimadores",
                 min_value=50,
@@ -393,12 +432,13 @@ def render_training_ui_mode() -> str:
                 value=100,
                 step=10
             )
-            
+        
             train_params = {
                 'contamination': contamination,
                 'n_estimators': n_estimators
             }
             
+        
         else:  # K-Means
             # Mostrar método del codo
             if st.button("Calcular Método del Codo"):
@@ -436,69 +476,61 @@ def render_training_ui_mode() -> str:
                 'n_clusters': n_clusters
             }
 
-        # Botón para entrenar modelo
-        if st.button("Entrenar Modelo", type="secondary") and 'data_transformed' in st.session_state:
-            with st.spinner("Entrenando modelo..."):
-                
-                df=st.session_state['data_transformed']
-                
-                # Seleccionar solo columnas numéricas
-                numeric_df = df.select_dtypes(include=[np.number])
-                
-                if algorithm == "Isolation Forest":
-                    model = IsolationForestModel()
-                    confusion_matrix, predictions, pca_data = model.train_model(numeric_df, train_params)
-                    
-                    st.session_state['model'] = model
-                    st.session_state['predictions'] = predictions
-                    st.session_state['pca_data'] = pca_data
-                    st.session_state['confusion_matrix'] = confusion_matrix
-                    
-                    
-                else:  # K-Means
-                    model = KMeansModel()
-                    confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(numeric_df, train_params)
-                    
-                    st.session_state['model'] = model
-                    st.session_state['cluster_labels'] = cluster_labels
-                    st.session_state['pca_data'] = pca_data
-                    st.session_state['confusion_matrix'] = confusion_matrix
-                    st.session_state['anomalies'] = anomalies
-                    st.session_state['distances'] = distances
-            
-            st.success("¡Modelo entrenado exitosamente!")
-            st.session_state["result_ready"]=True
-        return algorithm
+    st.session_state.train_params = train_params
+    return algorithm
+
+def render_model_saving_management():
+    if 'model' in st.session_state:
+
+        st.subheader("Gestión del Modelo")
+        
+        model_name = st.text_input("Nombre del modelo", value="mi_modelo")
+        if st.button("Guardar Modelo"):
+            try:
+                path = st.session_state.model.save_model(model_name)
+                st.success(f"Modelo guardado en: {path}")
+            except Exception as e:
+                st.error(f"Error al guardar: {str(e)}")
+
 def render_predict_ui_mode()-> tuple [AIModelInterface, str]:
     model = None
+    algorithm=None
     # Listar modelos guardados
     if os.path.exists('models'):
         saved_models = [f.replace('.pkl', '') for f in os.listdir('models') if f.endswith('.pkl')]
-        algorithm=None
+        col1, col2=st.columns(2)
         if saved_models:
-            selected_model = st.sidebar.selectbox("Cargar modelo guardado", saved_models)
+            selected_model = col1.selectbox("Cargar modelo guardado", saved_models)
             
             if selected_model.__contains__("_isolation_forest"):
                 algorithm="Isolation Forest"
             else:
                 algorithm="KMeans"
-            col_side1, col_side2=st.sidebar.columns(2)
-            if col_side1.button("Cargar Modelo Pre-entrenado"):
+
+            
+            if col1.button("Cargar Modelo Pre-entrenado"):
                 print("- Botón Cargar Modelo Pre-entrenado pintado")
                 load_pretrained_model(selected_model,algorithm)
+                print ("- pintar en columna datos del modelo cargado")
+                print(f"- es model None: {st.session_state.model==None}")
+                if algorithm is not None and algorithm=="Isolation Forest":
+                    render_isolation_forest_model_loaded_info(col2,st.session_state.model)
+                else:
+                    render_K_means_model_loaded_info(col2,st.session_state.model)
             
             if "model" in st.session_state:
-                if col_side2.button("Realizar Predicción", type="primary"):
+
+                
+                if st.button("Realizar Predicción", type="primary"):
                     print("- Botón predecir pintado")
   
-                    df=st.session_state.data_transformed
+                    df=st.session_state.data
                     model=st.session_state.model
                     
                     # Seleccionar solo columnas numéricas
                     numeric_df = df.select_dtypes(include=[np.number])
                     
                     if algorithm == "Isolation Forest":
-                    
                         predictions,score, pca_data = model.test_model(numeric_df)
                         
                         st.session_state['predictions'] = predictions
@@ -516,19 +548,28 @@ def render_predict_ui_mode()-> tuple [AIModelInterface, str]:
                         #st.session_state['anomalies'] = anomalies
                     
                     st.session_state["result_ready"]=True
-                    st.sidebar.success("Predicción realizada exitosamente!")
+                    st.success("Predicción realizada exitosamente!")
     return model,algorithm
-def render_model_saving_management():
-    st.markdown("---")
-    st.subheader("Gestión del Modelo")
-    
-    model_name = st.text_input("Nombre del modelo", value="mi_modelo")
-    if st.button("Guardar Modelo"):
-        try:
-            path = st.session_state['model'].save_model(model_name)
-            st.success(f"Modelo guardado en: {path}")
-        except Exception as e:
-            st.error(f"Error al guardar: {str(e)}")
+
+
+def render_isolation_forest_model_loaded_info(st_element, model:AIModelInterface ):
+    print("*********render_isolation_forest_model_loaded_info*************")
+    st_element.text("")
+    st_element.text("Parámetros de entrenamiento: ISOLATION FOREST")
+    st_element.text(f"- n_estimators: {model.model.n_estimators}")
+    st_element.text(f"- contamination: {model.model.contamination}")
+    st_element.text(f"- n_features_in: {model.model.n_features_in_}")
+    st_element.text(f"- max_features per tree: {model.model.max_features}")
+
+def render_K_means_model_loaded_info(st_element, model:AIModelInterface ):
+    print("*********render_K_means_model_loaded_info*************")
+    st_element.text("")
+    st_element.text("Parámetros de entrenamiento: K-MEAN")
+    st_element.text(f"- n_clusters: {model.model.n_clusters}")
+    st_element.text(f"- max_iter: {model.model.max_iter}")
+    st_element.text(f"- algorithm: {model.model.algorithm}")
+    st_element.text(f"- tol: {model.model.tol}")
+
 def render_tab_view_original_data():
     return
 
@@ -644,64 +685,88 @@ if 'data' in st.session_state:
     df = st.session_state['data']
     algorithm=None
 
+    # Inicializar el estado de la pestaña activa si no existe
+    if 'active_tab' not in st.session_state:
+        st.session_state.active_tab = 0
+
     #tabs:  - Visualización de datos originales
     #       - Entrenar nuevo modelo
     #       - Predecir con modelo pre-entrenado
-    tabs = st.tabs(['VISUALIZAR datos originales', 'ENTRENAR nuevo modelo', 'PREDECIR con modelo pre-entrenado'])
 
-    with tabs[0]:
+    tab_names = ['VISUALIZAR datos originales', 'ENTRENAR nuevo modelo', 'PREDECIR con modelo pre-entrenado']
+
+    # Crear radio buttons para controlar las pestañas manualmente
+    selected_tab = st.radio(
+        "",
+        options=range(len(tab_names)),
+        format_func=lambda x: tab_names[x],
+        index=st.session_state.active_tab,
+        horizontal=True,
+        key="tab_selector"
+    )
+
+    # Actualizar el estado de la pestaña activa
+    st.session_state.active_tab = selected_tab
+
+    # Mostrar el contenido basado en la pestaña seleccionada
+    if st.session_state.active_tab == 0:
         st.subheader("Visualizar datos originales:")
-        if st.session_state.data_processed_flag==False :
-            render_dataframe_sample(df)  
-
-    with tabs[1]:
-        st.subheader("Entrenar nuevo modelo")
-        c1, c2 = st.columns(2)
-        algorithm= render_training_ui_mode()
-
-    with tabs[2]:
-        st.subheader("Predecir usando modelo pre-entrenado")
-
-
-
-    # Botón para transformar datos:
-    if st.sidebar.button("Procesar / transformar Datos",type="primary"):
-        with st.spinner("Procesando datos..."):
-            df_transformed=transform_data(df)
-            st.session_state['data_transformed'] = df_transformed
-            st.session_state.data_processed_flag=True
-            st.sidebar.success("Datos procesados correctamente")
-
-    #Datos procesados: visualizo información agregada del dataset transformado
-    if st.session_state.data_processed_flag==True and 'data_transformed' in st.session_state and not st.session_state.data_transformed.empty:
-        st.subheader("Datos procesados: ¿qué desea hacer con los datos?")
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("Entrenar nuevo modelo", icon="🛠️",type="secondary",on_click= lambda:select_ui_mode(TRAIN_MODE)):
-                print ("- Button: Entrenar modelo")
-        with b2:
-            if st.button("Cargar modelo y generar predicción",icon="📈",type="secondary",on_click= lambda:select_ui_mode(PREDICT_MODE)):
-                print ("- Button: Cargar modelo y generar predicción")
-
-        render_dataframe_sample(st.session_state['data_transformed'])
-
-    #Lectura inicial de datos y aun no procesados: visualizo información agregada del
-    #dataset original
-    if st.session_state.data_processed_flag==False :
-        st.subheader("Datos originales:")
-        render_dataframe_sample(df)   
+        if st.session_state.data_processed_flag == False:
+            render_dataframe_sample(df)
 
     #RENDERIZADO DE UI EN MODO: ENTRENAMIENTO:
-    if "ui_mode" in st.session_state and st.session_state.ui_mode==TRAIN_MODE:
-        # Selección de algoritmo e interfaz de ajuste de hiperparámetros
-        print(" Entrando en TRAIN mode:")
+    elif st.session_state.active_tab == 1:
+        # Entrenar nuevo modelo y ajuste de hiperparámetros
+        st.subheader("Entrenar nuevo modelo")
         algorithm = render_training_ui_mode()
+        render_model_saving_management()
 
     #RENDERIZADO DE UI EN MODO: PREDICCIÓN:
-    if "ui_mode" in st.session_state and st.session_state.ui_mode==PREDICT_MODE:
-        print(" Entrando en PREDICT mode:")
+    elif st.session_state.active_tab == 2:
         # Carga y selección de modelo previamente entrenado
+        st.subheader("Predecir usando modelo pre-entrenado")
         model,algorithm = render_predict_ui_mode()
+
+
+
+    # # Botón para transformar datos:
+    # if st.sidebar.button("Procesar / transformar Datos",type="primary"):
+    #     with st.spinner("Procesando datos..."):
+    #         df_transformed=transform_data(df)
+    #         st.session_state['data_transformed'] = df_transformed
+    #         st.session_state.data_processed_flag=True
+    #         st.sidebar.success("Datos procesados correctamente")
+
+    # #Datos procesados: visualizo información agregada del dataset transformado
+    # if st.session_state.data_processed_flag==True and 'data_transformed' in st.session_state and not st.session_state.data_transformed.empty:
+    #     st.subheader("Datos procesados: ¿qué desea hacer con los datos?")
+    #     b1, b2 = st.columns(2)
+    #     with b1:
+    #         if st.button("Entrenar nuevo modelo", icon="🛠️",type="secondary",on_click= lambda:select_ui_mode(TRAIN_MODE)):
+    #             print ("- Button: Entrenar modelo")
+    #     with b2:
+    #         if st.button("Cargar modelo y generar predicción",icon="📈",type="secondary",on_click= lambda:select_ui_mode(PREDICT_MODE)):
+    #             print ("- Button: Cargar modelo y generar predicción")
+
+    #     render_dataframe_sample(st.session_state['data_transformed'])
+
+    # #Lectura inicial de datos y aun no procesados: visualizo información agregada del
+    # #dataset original
+    # if st.session_state.data_processed_flag==False :
+    #     st.subheader("Datos originales:")
+    #     render_dataframe_sample(df)   
+
+    # #RENDERIZADO DE UI EN MODO: ENTRENAMIENTO:
+    # if "ui_mode" in st.session_state and st.session_state.ui_mode==TRAIN_MODE:
+    #     # Selección de algoritmo e interfaz de ajuste de hiperparámetros
+    #     print(" Entrando en TRAIN mode:")
+    #     algorithm = render_training_ui_mode()
+
+    # #RENDERIZADO DE UI EN MODO: PREDICCIÓN:
+    # if "ui_mode" in st.session_state and st.session_state.ui_mode==PREDICT_MODE:
+    #     print(" Entrando en PREDICT mode:")
+    #     # Carga y selección de modelo previamente entrenado
+    #     model,algorithm = render_predict_ui_mode()
 
     #VISUALIZAR RESULTADOS SI HAY DISPONIBLES EN SESIÓN
     if 'model' in st.session_state and st.session_state.result_ready:

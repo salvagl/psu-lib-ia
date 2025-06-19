@@ -77,6 +77,25 @@ class AIModelInterface(ABC):
         """
         pass
 
+    def get_transformation(self) -> ColumnTransformer:
+        transformation = ColumnTransformer([
+        ("t00", "drop",['userid']),
+        ("pipe01",COUNTRY_CODE_PIPE.set_output(transform="pandas"),['client'] ),
+        ("pipe02", NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE.set_output(transform="pandas"),['datetime']),
+        ("pipe03", NORMALIZED_LENGTH_PIPE.set_output(transform="pandas"),['request','referer']),
+        ("pipe04", NORMALIZED_DELTATIME_BETWEEN_REQUEST_IN_SESSION_PIPE.set_output(transform="pandas"),['client','datetime']),
+        ("t05", AddOsCommandFlagTransformer(),['raw_request']),
+        ("t06", AddHexadecimalCharactersFlagTransformer(),['raw_request']),
+        ("t07", AddWeirdCharactersFrequencyTransformer(),['raw_request']),
+        ("t08", OneHotEncoder(handle_unknown='ignore',sparse_output=False, drop=None),['method','status']),
+        ("t09", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['request']),  
+        ("t10", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['referer']),               #tokenizado por "/"
+        ("t11", PandasCompatibleCountVectorizer(token_pattern=r'\b\w+\b',max_features=100,output_transform="pandas"),['user_agent']),                 #tokenizado por palabra
+        ("t12", PandasCompatibleTfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200,output_transform="pandas"), ['raw_request'])  #tokenizado por datagramas entre 3 y 6 char para detectar patrones de comandos    
+        ], remainder='passthrough', verbose_feature_names_out=True)
+        transformation.set_output(transform="pandas")
+        return transformation
+
 #**********************************************************************************************
 #                                       MODELOS IMPLEMENTADOS 
 #**********************************************************************************************
@@ -84,12 +103,12 @@ class AIModelInterface(ABC):
 class IsolationForestModel(AIModelInterface):
     def __init__(self):
         self.model = None
-        self.scaler = StandardScaler()
+        self.transformer = self.get_transformation()
         self.pca = PCA(n_components=2)
         
     def train_model(self, data, trainParams):
         # Escalar datos
-        scaled_data = self.scaler.fit_transform(data)
+        scaled_data = self.transformer.fit_transform(data)
         
         # Entrenar modelo
         self.model = IsolationForest(
@@ -118,7 +137,7 @@ class IsolationForestModel(AIModelInterface):
     def save_model(self, modelName):
         model_data = {
             'model': self.model,
-            'scaler': self.scaler,
+            'transformer': self.transformer,
             'pca': self.pca
         }
         
@@ -136,7 +155,7 @@ class IsolationForestModel(AIModelInterface):
             model_data = pickle.load(f)
         
         self.model = model_data['model']
-        self.scaler = model_data['scaler']
+        self.transformer = model_data['transformer']
         self.pca = model_data['pca']
         return self.model
     
@@ -144,7 +163,7 @@ class IsolationForestModel(AIModelInterface):
         if self.model is None:
             raise ValueError("Modelo no entrenado")
         
-        scaled_data = self.scaler.transform(data)
+        scaled_data = self.transformer.transform(data)
         predictions = self.model.predict(scaled_data)
         scores = self.model.decision_function(scaled_data)
         pca_data = self.pca.transform(scaled_data)
@@ -154,12 +173,12 @@ class IsolationForestModel(AIModelInterface):
 class KMeansModel(AIModelInterface):
     def __init__(self):
         self.model = None
-        self.scaler = StandardScaler()
+        self.transformer = self.get_transformation()
         self.pca = PCA(n_components=2)
         
     def train_model(self, data, trainParams):
         # Escalar datos
-        scaled_data = self.scaler.fit_transform(data)
+        scaled_data = self.transformer.fit_transform(data)
         
         # Entrenar modelo
         k = trainParams.get('n_clusters', 8)
@@ -197,7 +216,7 @@ class KMeansModel(AIModelInterface):
     def save_model(self, modelName):
         model_data = {
             'model': self.model,
-            'scaler': self.scaler,
+            'transformer': self.transformer,
             'pca': self.pca
         }
         
@@ -215,7 +234,7 @@ class KMeansModel(AIModelInterface):
             model_data = pickle.load(f)
         
         self.model = model_data['model']
-        self.scaler = model_data['scaler']
+        self.transformer = model_data['transformer']
         self.pca = model_data['pca']
         return self.model
     
@@ -223,7 +242,7 @@ class KMeansModel(AIModelInterface):
         if self.model is None:
             raise ValueError("Modelo no entrenado")
         
-        scaled_data = self.scaler.transform(data)
+        scaled_data = self.transformer.transform(data)
         cluster_labels = self.model.predict(scaled_data)
         pca_data = self.pca.transform(scaled_data)
         

@@ -90,22 +90,25 @@ def transform_data(data:pd.DataFrame)->pd.DataFrame:
 #Funciones de visualización en UI
 def render_dataframe_sample(df:pd.DataFrame):
     print(f"- [render_dataframe_sample] printing loaded data (procesed={st.session_state["data_processed_flag"]})")
-    df_dense = df.copy()
+    
+    #solo mostramos preview de un 10% del dataframe
+    subset_size = int(len(df) * 0.10)
+    df_dense_subset = df.head(subset_size).copy()
     
     # Convierte columnas sparse a densas
-    for col in df_dense.columns:
-        if  isinstance(df_dense[col].dtype, pd.SparseDtype):
-            df_dense[col] = df_dense[col].sparse.to_dense()
+    for col in df_dense_subset.columns:
+        if  isinstance(df_dense_subset[col].dtype, pd.SparseDtype):
+            df_dense_subset[col] = df_dense_subset[col].sparse.to_dense()
 
     # Información de los datos sin procesar
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader(f"Vista Previa de los Datos")
-        st.dataframe(df_dense.head())
+        st.subheader(f"Vista Previa de los Datos (sampling: 10%)")
+        st.dataframe(df_dense_subset, height=315)
     
     with col2:
-        st.subheader("Estadísticas Básicas")
-        st.dataframe(df_dense.describe())
+        st.subheader("Estadísticas Básicas (datos numéricos)")
+        st.dataframe(df.describe())
 def render_anomalies_grid(original_df, predictions):
     """
     Muestra los registros originales donde se detectaron anomalías
@@ -172,7 +175,6 @@ def render_anomalies_grid(original_df, predictions):
 def clean_ui():
     print('- [clean_ui] Atención: LIMPIANDO DATOS DE SESION')
     st.session_state['data_processed_flag']=False
-    st.session_state.pop('data_transformed',None)
     st.session_state.pop('model',None)
     st.session_state.pop('result_ready',None)
     st.session_state.pop('ui_mode',None)
@@ -506,32 +508,27 @@ def render_predict_ui_mode()-> tuple [AIModelInterface, str]:
                 algorithm="Isolation Forest"
             else:
                 algorithm="KMeans"
-
-            
             if col1.button("Cargar Modelo Pre-entrenado"):
-                print("- Botón Cargar Modelo Pre-entrenado pintado")
+                print("- Botón Cargar Modelo Pre-entrenado renderizado")
                 load_pretrained_model(selected_model,algorithm)
-                print ("- pintar en columna datos del modelo cargado")
-                print(f"- es model None: {st.session_state.model==None}")
+               
                 if algorithm is not None and algorithm=="Isolation Forest":
                     render_isolation_forest_model_loaded_info(col2,st.session_state.model)
                 else:
                     render_K_means_model_loaded_info(col2,st.session_state.model)
             
             if "model" in st.session_state:
-
-                
                 if st.button("Realizar Predicción", type="primary"):
-                    print("- Botón predecir pintado")
+                    print("- Botón predecir renderizado")
   
                     df=st.session_state.data
                     model=st.session_state.model
                     
                     # Seleccionar solo columnas numéricas
-                    numeric_df = df.select_dtypes(include=[np.number])
+                    # numeric_df = df.select_dtypes(include=[np.number])
                     
                     if algorithm == "Isolation Forest":
-                        predictions,score, pca_data = model.test_model(numeric_df)
+                        predictions,score, pca_data = model.test_model(df)
                         
                         st.session_state['predictions'] = predictions
                         st.session_state['pca_data'] = pca_data
@@ -540,7 +537,7 @@ def render_predict_ui_mode()-> tuple [AIModelInterface, str]:
                         
                     else:  # K-Means                       
                         #confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(numeric_df, train_params)
-                        cluster_labels, min_distances, pca_data = model.test_model(numeric_df)
+                        cluster_labels, min_distances, pca_data = model.test_model(df)
                         
                         st.session_state['cluster_labels'] = cluster_labels
                         st.session_state['pca_data'] = pca_data
@@ -549,8 +546,9 @@ def render_predict_ui_mode()-> tuple [AIModelInterface, str]:
                     
                     st.session_state["result_ready"]=True
                     st.success("Predicción realizada exitosamente!")
+            else:
+                st.info("🔽 No hay ningún modelo cargado en memoria. Por favor, selecciona una opción de la lista y carga un modelo para realizar la predicción")
     return model,algorithm
-
 
 def render_isolation_forest_model_loaded_info(st_element, model:AIModelInterface ):
     print("*********render_isolation_forest_model_loaded_info*************")
@@ -570,7 +568,28 @@ def render_K_means_model_loaded_info(st_element, model:AIModelInterface ):
     st_element.text(f"- algorithm: {model.model.algorithm}")
     st_element.text(f"- tol: {model.model.tol}")
 
-def render_tab_view_original_data():
+def initialize_session_state():
+    st.session_state.render_count+=1
+    #- data_processed_flag: controla que la información sumarizada del dataset cambie entre 
+    #                       datos originales o datos transformados/procesados
+    if 'data_processed_flag' not in st.session_state:
+        st.session_state['data_processed_flag'] = False
+
+    #- ui_mode: Posibles valores TRAIN/PREDICT o None
+    if 'ui_mode' not in st.session_state:
+        st.session_state['ui_mode'] = None
+    #- result_ready: indica si existen en sesión resultados preparados para mostrar ya sea por un entrenamiento nuevo
+    #                o por una predicción   
+    if 'result_ready' not in st.session_state:
+        st.session_state["result_ready"]=False
+
+    #- inicializa el estado del expander con la info sobre nosotros y los modelos implementados la primera vez que se carga la app
+    if "expander_open" not in st.session_state:
+        st.session_state.expander_open = True
+    else:
+        st.session_state.expander_open = False  # en las siguientes interacciones, aparece contraído
+
+    
     return
 
 #**********************************************************************************************
@@ -586,19 +605,7 @@ TRAIN_MODE = "TRAIN_MODE"
 PREDICT_MODE = "PREDICT_MODE"
 
 #Inicialización de FLAGS y var.  que controlan la UI:
-st.session_state.render_count+=1
-#- data_processed_flag: controla que la información sumarizada del dataset cambie entre 
-#                       datos originales o datos transformados/procesados
-if 'data_processed_flag' not in st.session_state:
-    st.session_state['data_processed_flag'] = False
-
-#- ui_mode: Posibles valores TRAIN/PREDICT o None
-if 'ui_mode' not in st.session_state:
-    st.session_state['ui_mode'] = None
-#- result_ready: indica si existen en sesión resultados preparados para mostrar ya sea por un entrenamiento nuevo
-#                o por una predicción   
-if 'result_ready' not in st.session_state:
-    st.session_state["result_ready"]=False
+initialize_session_state()
 
 # Configuración de la página
 st.set_page_config(
@@ -689,6 +696,9 @@ if 'data' in st.session_state:
     if 'active_tab' not in st.session_state:
         st.session_state.active_tab = 0
 
+    if "last_selected_tab" not in st.session_state:
+        st.session_state.last_selected_tab = st.session_state.active_tab
+
     #tabs:  - Visualización de datos originales
     #       - Entrenar nuevo modelo
     #       - Predecir con modelo pre-entrenado
@@ -704,6 +714,10 @@ if 'data' in st.session_state:
         horizontal=True,
         key="tab_selector"
     )
+    # Detectar cambio de selección
+    if selected_tab != st.session_state.last_selected_tab:
+        clean_ui()  # Ejecuta tu función
+        st.session_state.last_selected_tab = selected_tab
 
     # Actualizar el estado de la pestaña activa
     st.session_state.active_tab = selected_tab
@@ -727,47 +741,6 @@ if 'data' in st.session_state:
         st.subheader("Predecir usando modelo pre-entrenado")
         model,algorithm = render_predict_ui_mode()
 
-
-
-    # # Botón para transformar datos:
-    # if st.sidebar.button("Procesar / transformar Datos",type="primary"):
-    #     with st.spinner("Procesando datos..."):
-    #         df_transformed=transform_data(df)
-    #         st.session_state['data_transformed'] = df_transformed
-    #         st.session_state.data_processed_flag=True
-    #         st.sidebar.success("Datos procesados correctamente")
-
-    # #Datos procesados: visualizo información agregada del dataset transformado
-    # if st.session_state.data_processed_flag==True and 'data_transformed' in st.session_state and not st.session_state.data_transformed.empty:
-    #     st.subheader("Datos procesados: ¿qué desea hacer con los datos?")
-    #     b1, b2 = st.columns(2)
-    #     with b1:
-    #         if st.button("Entrenar nuevo modelo", icon="🛠️",type="secondary",on_click= lambda:select_ui_mode(TRAIN_MODE)):
-    #             print ("- Button: Entrenar modelo")
-    #     with b2:
-    #         if st.button("Cargar modelo y generar predicción",icon="📈",type="secondary",on_click= lambda:select_ui_mode(PREDICT_MODE)):
-    #             print ("- Button: Cargar modelo y generar predicción")
-
-    #     render_dataframe_sample(st.session_state['data_transformed'])
-
-    # #Lectura inicial de datos y aun no procesados: visualizo información agregada del
-    # #dataset original
-    # if st.session_state.data_processed_flag==False :
-    #     st.subheader("Datos originales:")
-    #     render_dataframe_sample(df)   
-
-    # #RENDERIZADO DE UI EN MODO: ENTRENAMIENTO:
-    # if "ui_mode" in st.session_state and st.session_state.ui_mode==TRAIN_MODE:
-    #     # Selección de algoritmo e interfaz de ajuste de hiperparámetros
-    #     print(" Entrando en TRAIN mode:")
-    #     algorithm = render_training_ui_mode()
-
-    # #RENDERIZADO DE UI EN MODO: PREDICCIÓN:
-    # if "ui_mode" in st.session_state and st.session_state.ui_mode==PREDICT_MODE:
-    #     print(" Entrando en PREDICT mode:")
-    #     # Carga y selección de modelo previamente entrenado
-    #     model,algorithm = render_predict_ui_mode()
-
     #VISUALIZAR RESULTADOS SI HAY DISPONIBLES EN SESIÓN
     if 'model' in st.session_state and st.session_state.result_ready:
         print (f"- Hay model en sesión y resultados: {st.session_state.ui_mode}{algorithm}")
@@ -776,22 +749,21 @@ if 'data' in st.session_state:
             print("- TRAIN MODE: se muestran gráficos, grid y gestión para guardar el modelo")
             # Mostrar resultados si el modelo está entrenado
             render_training_results_graphic(st.session_state.ui_mode, algorithm)
-            # Funciones para guardar modelo
-            render_model_saving_management()
+           
         else:
-            print("- PREDICT MODE: se muestran gráficos, grid y gestión para guardar el modelo")
+            print("- PREDICT MODE: se muestran gráficos, grid anomalías")
             # Mostrar resultados si el modelo está cargado
             render_prediction_results_graphic(st.session_state.ui_mode, algorithm)
             
         
 
 else:
-    st.info("👆 Por favor, carga un archivo .log en formato CLF o genera datos de ejemplo desde el panel lateral para comenzar.")
+    st.sidebar.info("👆 Por favor, carga un archivo .log en formato CLF o genera datos de ejemplo desde el panel lateral para comenzar.")
 
 
 
 # Información adicional
-with st.expander("ℹ️ Información adicional"):
+with st.expander("ℹ️ Información adicional", expanded=st.session_state.expander_open):
     st.markdown("""
     ### Autores
     - **Bryan Silva** - bryannsilva3@gmail.com 

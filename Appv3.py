@@ -520,34 +520,30 @@ def render_predict_ui_mode()-> tuple [AIModelInterface, str]:
             if "model" in st.session_state:
                 if st.button("Realizar Predicción", type="primary"):
                     print("- Botón predecir renderizado")
-  
-                    df=st.session_state.data
-                    model=st.session_state.model
-                    
-                    # Seleccionar solo columnas numéricas
-                    # numeric_df = df.select_dtypes(include=[np.number])
-                    
-                    if algorithm == "Isolation Forest":
-                        predictions,score, pca_data = model.test_model(df)
+                    with st.spinner("Generando predición con modelo pre-entrenado..."):
+                        df=st.session_state.data
+                        model=st.session_state.model
                         
-                        st.session_state['predictions'] = predictions
-                        st.session_state['pca_data'] = pca_data
-                        st.session_state['score'] = score
+                        if algorithm == "Isolation Forest":
+                            predictions,score, pca_data = model.test_model(df)
+                            
+                            st.session_state['predictions'] = predictions
+                            st.session_state['pca_data'] = pca_data
+                            st.session_state['score'] = score
+                                                        
+                        else:  # K-Means                       
+                            #confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(numeric_df, train_params)
+                            cluster_labels, min_distances, pca_data = model.test_model(df)
+                            
+                            st.session_state['cluster_labels'] = cluster_labels
+                            st.session_state['pca_data'] = pca_data
+                            st.session_state['distances'] = min_distances
+                            #st.session_state['anomalies'] = anomalies
                         
-                        
-                    else:  # K-Means                       
-                        #confusion_matrix, cluster_labels, pca_data, anomalies, distances = model.train_model(numeric_df, train_params)
-                        cluster_labels, min_distances, pca_data = model.test_model(df)
-                        
-                        st.session_state['cluster_labels'] = cluster_labels
-                        st.session_state['pca_data'] = pca_data
-                        st.session_state['distances'] = min_distances
-                        #st.session_state['anomalies'] = anomalies
-                    
-                    st.session_state["result_ready"]=True
-                    st.success("Predicción realizada exitosamente!")
-            else:
-                st.info("🔽 No hay ningún modelo cargado en memoria. Por favor, selecciona una opción de la lista y carga un modelo para realizar la predicción")
+                        st.session_state["result_ready"]=True
+                        st.success("Predicción realizada exitosamente!")
+        else:
+            st.info("🔽 No hay ningún modelo cargado en memoria. Por favor, selecciona una opción de la lista y carga un modelo para realizar la predicción")
     return model,algorithm
 
 def render_isolation_forest_model_loaded_info(st_element, model:AIModelInterface ):

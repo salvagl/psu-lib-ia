@@ -213,7 +213,6 @@ class IsolationForestModel(AIModelInterface):
         self.timer.elapsed("pca done")
         
         self.timer.end()
-
         
         return predictions, scores, pca_data
 # Implementación para K-Means

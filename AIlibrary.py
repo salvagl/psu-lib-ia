@@ -3,7 +3,6 @@ import numpy as np
 import pickle
 from sklearn.ensemble import IsolationForest
 from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 import pandas as pd
@@ -23,7 +22,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer,HashingVectorizer
 from sklearn.base import BaseEstimator,TransformerMixin
 from sklearn.utils.validation import check_array, check_is_fitted
 from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
 import time
+import inspect
 
 from scipy.sparse import hstack
 from abc import ABC, abstractmethod
@@ -85,6 +86,7 @@ class AIModelInterface(ABC):
         ("pipe02", NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE.set_output(transform="pandas"),['datetime']),
         ("pipe03", NORMALIZED_LENGTH_PIPE.set_output(transform="pandas"),['request','referer']),
         ("pipe04", NORMALIZED_DELTATIME_BETWEEN_REQUEST_IN_SESSION_PIPE.set_output(transform="pandas"),['client','datetime']),
+        ('pipe05', NORMALIZED_NUM.set_output(transform='pandas'),['size_in_bytes']),
         ("t05", AddOsCommandFlagTransformer(),['raw_request']),
         ("t06", AddHexadecimalCharactersFlagTransformer(),['raw_request']),
         ("t07", AddWeirdCharactersFrequencyTransformer(),['raw_request']),
@@ -106,50 +108,72 @@ class IsolationForestModel(AIModelInterface):
         self.model = None
         self.transformer = self.get_transformation()
         self.pca = PCA(n_components=2)
+        self.timer = Timer()
+        self.training_time=0
         
     def train_model(self, data, trainParams):
-        # Escalar datos
-        #print("Columnas del DataFrame:", data.columns.tolist())
-        #print("ColumnTransformer:", self.transformer)
-        print (data.head(20))
-        scaled_data = self.transformer.fit_transform(data)
-        print("**********************DETECCIÓN DE NAN***************************")
-        print(scaled_data[scaled_data.isna()])
-        print (scaled_data[scaled_data.isna().any(axis=1)])
+        self.timer.start()
+
+        test_size = trainParams.get('validation_split', 0.2)  # 20% por defecto para validación
+        
+        train_indices, validation_indices = train_test_split(
+            data.index, 
+            test_size=test_size, 
+            random_state=42
+            )
+    
+        train_data = data.loc[train_indices].copy()
+        validation_data = data.loc[validation_indices].copy()
+        
+        # Resetear índices
+        train_data = train_data.reset_index(drop=True)
+        validation_data = validation_data.reset_index(drop=True)
+
+        # Escalar datos y transformar
+        scaled_train_data  = self.transformer.fit_transform(train_data)
+        self.timer.elapsed("transformer.fit_transform over training-dataset done")
+
         # Entrenar modelo
         self.model = IsolationForest(
             contamination=trainParams.get('contamination', 0.1),
             n_estimators=trainParams.get('n_estimators', 100),
             random_state=42
         )
-        print(f"- [train_model] START ⏱️")
-        start_time = time.time()
-        predictions = self.model.fit_predict(scaled_data)
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"- [train_model] train fit_predict done ✅")
-        print(f"- [train_model] END ⏱️ in: {elapsed_time:.2f} segundos")
-
-        # PCA para visualización
-        pca_data = self.pca.fit_transform(scaled_data)
-        print(f"- [train_model] pca done ✅")
-        # Calcular métricas
-        anomaly_count = np.sum(predictions == -1)
-        normal_count = np.sum(predictions == 1)
         
-        confusion_matrix = {
+        predictions = self.model.fit(scaled_train_data )
+        self.timer.elapsed("model.fit over training-dataset done")
+        
+        # PCA para visualización
+        pca_data = self.pca.fit(scaled_train_data )
+        self.timer.elapsed("pca.fit over training-dataset done")
+
+        scaled_validation_data = self.transformer.transform(validation_data)
+        validation_predictions = self.model.predict(scaled_validation_data)
+        self.timer.elapsed("predict over validation-dataset done")
+
+        # PCA para datos de validación
+        validation_pca_data = self.pca.transform(scaled_validation_data)
+        self.timer.elapsed("validation pca.transform over validation-dataset done")
+
+        # Calcular métricas
+        anomaly_count = np.sum(validation_predictions  == -1)
+        normal_count = np.sum(validation_predictions  == 1)
+        self.timer.elapsed("calculate metrics over validation-dataset done")
+
+        validation_confusion_matrix = {
             'anomalies': anomaly_count,
             'normal': normal_count,
-            'contamination_rate': anomaly_count / len(predictions)
+            'contamination_rate': anomaly_count / len(validation_predictions)            
         }
-        
-        return confusion_matrix, predictions, pca_data
+        self.training_time=self.timer.end()
+        return validation_confusion_matrix, validation_predictions, validation_pca_data, validation_data
     
     def save_model(self, modelName):
         model_data = {
             'model': self.model,
             'transformer': self.transformer,
-            'pca': self.pca
+            'pca': self.pca,
+            'training_time':self.training_time
         }
         
         if not os.path.exists('models'):
@@ -173,26 +197,22 @@ class IsolationForestModel(AIModelInterface):
     def test_model(self, data):
         if self.model is None:
             raise ValueError("Modelo no entrenado")
-        print(f"- [test_model] START ⏱️")
-        start_time = time.time()
+        
+        self.timer.start()
+
         scaled_data = self.transformer.transform(data)
-        print(f"- [test_model] transform done ✅")
-
-        # print("**********************DETECCIÓN DE NAN***************************")
-        # print(scaled_data[scaled_data.isna()])
-        # print (scaled_data[scaled_data.isna().any(axis=1)])
-
-        # print(f"- [test_model] START ⏱️")
-        start_time = time.time()
+        self.timer.elapsed("transform done")
+        
         predictions = self.model.predict(scaled_data)
-        print(f"- [test_model] predict done ✅")
+        self.timer.elapsed("predict done")
+
         scores = self.model.decision_function(scaled_data)
-        print(f"- [test_model] decision_fucntion done ✅")
+        self.timer.elapsed("decision_fucntion done")
+        
         pca_data = self.pca.transform(scaled_data)
-        print(f"- [test_model] pca done ✅")
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"- [test_model] END ⏱️ in: {elapsed_time:.2f} segundos")
+        self.timer.elapsed("pca done")
+        
+        self.timer.end()
 
         
         return predictions, scores, pca_data
@@ -202,11 +222,15 @@ class KMeansModel(AIModelInterface):
         self.model = None
         self.transformer = self.get_transformation()
         self.pca = PCA(n_components=2)
+        self.timer = Timer()
+        self.training_time=0
         
     def train_model(self, data, trainParams):
+        self.timer.start()
+
         # Escalar datos
         scaled_data = self.transformer.fit_transform(data)
-        
+        self.timer.elapsed("fit_transform done")
         # Entrenar modelo
         k = trainParams.get('n_clusters', 8)
         self.model = KMeans(
@@ -216,19 +240,23 @@ class KMeansModel(AIModelInterface):
         )
         
         cluster_labels = self.model.fit_predict(scaled_data)
-        
+        self.timer.elapsed("fit_predict done")
+
         # PCA para visualización
         pca_data = self.pca.fit_transform(scaled_data)
+        self.timer.elapsed("pca done")
         
         # Calcular métricas
         inertia = self.model.inertia_
         silhouette_avg = silhouette_score(scaled_data, cluster_labels)
+        self.timer.elapsed("silhouette_score done")
         
         # Detectar anomalías basándose en distancia a centroides
         distances = self.model.transform(scaled_data)
         min_distances = np.min(distances, axis=1)
         threshold = np.percentile(min_distances, 90)  # Top 10% como anomalías
         anomalies = min_distances > threshold
+        self.timer.elapsed("anomalies dectection done")
         
         confusion_matrix = {
             'inertia': inertia,
@@ -237,14 +265,15 @@ class KMeansModel(AIModelInterface):
             'anomalies': np.sum(anomalies),
             'normal': len(anomalies) - np.sum(anomalies)
         }
-        
+        self.training_time=self.self.timer.end()
         return confusion_matrix, cluster_labels, pca_data, anomalies, min_distances
     
     def save_model(self, modelName):
         model_data = {
             'model': self.model,
             'transformer': self.transformer,
-            'pca': self.pca
+            'pca': self.pca,
+            'training_time':self.training_time
         }
         
         if not os.path.exists('models'):
@@ -268,15 +297,21 @@ class KMeansModel(AIModelInterface):
     def test_model(self, data):
         if self.model is None:
             raise ValueError("Modelo no entrenado")
-        
+        self.timer.start()
         scaled_data = self.transformer.transform(data)
+        self.timer.elapsed("transform done")
+
         cluster_labels = self.model.predict(scaled_data)
+        self.timer.elapsed("predict done")
+
         pca_data = self.pca.transform(scaled_data)
+        self.timer.elapsed("pca done")
         
         # Calcular distancias para detección de anomalías
         distances = self.model.transform(scaled_data)
         min_distances = np.min(distances, axis=1)
-        
+        self.timer.elapsed("calculate distances done")
+
         return cluster_labels, min_distances, pca_data
 
 #**********************************************************************************************
@@ -875,7 +910,68 @@ class DataTransformer:
         vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200)
         matrix = vectorizer.fit_transform(df[column].astype(str))
         return matrix, vectorizer
+
+class Timer:
+    def __init__(self):
+        self.start_time = None
+        self.last_elapsed_time = None
+        self.is_started = False
+    
+    def _get_caller_function_name(self):
+        """Obtiene el nombre de la función que llamó al método actual"""
+        # Obtenemos el stack de llamadas
+        # [0] es este método, [1] es el método de Timer que lo llamó, [2] es la función del usuario
+        frame = inspect.currentframe()
+        try:
+            caller_frame = frame.f_back.f_back
+            if caller_frame:
+                return caller_frame.f_code.co_name
+            return "unknown"
+        finally:
+            del frame
+    
+    def start(self, message=""):
+        """Inicializa el timer y muestra mensaje de inicio"""
+        self.start_time = time.time()
+        self.last_elapsed_time = self.start_time
+        self.is_started = True
         
+        function_name = self._get_caller_function_name()
+        print(f"- [{function_name}] 🕐 START: {message}")
+    
+    def elapsed(self, message="")->float:
+        """Muestra el tiempo transcurrido desde el último elapsed"""
+        if not self.is_started:
+            print("❌ Timer no ha sido iniciado. Llama a start() primero.")
+            return 0
+        
+        current_time = time.time()
+        elapsed_seconds = current_time - self.last_elapsed_time
+        self.last_elapsed_time = current_time
+        
+        function_name = self._get_caller_function_name()
+        print(f"- [{function_name}] ✅ {message} ({elapsed_seconds:.3f}s)")
+        return elapsed_seconds
+    
+    def end(self, message="")->float:
+        """Finaliza el timer y muestra mensaje final"""
+        if not self.is_started:
+            print("❌ Timer no ha sido iniciado. Llama a start() primero.")
+            return
+        
+        current_time = time.time()
+        total_time = current_time - self.start_time
+        
+        function_name = self._get_caller_function_name()
+        print(f"- [{function_name}] 🏁 END: {message} (Total: {total_time:.3f}s)")
+        
+        # Reset del timer
+        self.start_time = None
+        self.last_elapsed_time = None
+        self.is_started = False
+
+        return total_time
+
 
 '''
 Heredar de BaseEstimator y TransformerMixin:
@@ -891,7 +987,7 @@ class IpAddressToISOCountryCodeTransformer(BaseEstimator, TransformerMixin):
         if cache_file:
             self._load_cache()
         else:
-            print("No se ha especificado guardar cache en disco")
+            print("  - No se ha especificado guardar cache en disco")
     
     def fit(self, X, y=None):
         """
@@ -917,10 +1013,10 @@ class IpAddressToISOCountryCodeTransformer(BaseEstimator, TransformerMixin):
             ip_series = X.iloc[:, 0]  # Se asume que la IP está en la primera columna
             country_codes = []
             
-            print("- Adding col.: country_code from IP (external service: IpInfo-Lite)")
+            print("  - Adding col.: country_code from IP (external service: IpInfo-Lite)")
             tqdm.pandas(desc="- Geolocalizando IPs")
             
-            for ip in tqdm(ip_series, desc="- Processing IPs"):
+            for ip in tqdm(ip_series, desc="  - Processing IPs"):
                 country_code = self._get_country_from_ip(str(ip))
                 country_codes.append(country_code)
             
@@ -934,7 +1030,7 @@ class IpAddressToISOCountryCodeTransformer(BaseEstimator, TransformerMixin):
             assert self.n_features_in_ == X_array.shape[1]
             
             country_codes = []
-            print("- Adding col.: country_code from IP (external service: IpInfo-Lite)")
+            print("  - Adding col.: country_code from IP (external service: IpInfo-Lite)")
             
             for row in tqdm(X_array, desc="Processing IPs"):
                 ip = str(row[0])  
@@ -952,12 +1048,12 @@ class IpAddressToISOCountryCodeTransformer(BaseEstimator, TransformerMixin):
             try:
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     self.ip_cache_ = json.load(f)
-                print(f"Cache cargado desde: {self.cache_file}")
+                print(f"  - Cache cargado desde: {self.cache_file}")
             except Exception as e:
-                print(f"Error leyendo cache: {e}")
+                print(f"  - Error leyendo cache: {e}")
                 self.ip_cache_ = {}
         else:
-            print(f"No se localiza fichero de cache con nombre: {self.cache_file}")
+            print(f"  - No se localiza fichero de cache con nombre: {self.cache_file}")
     
     def _save_cache(self):
         """
@@ -968,9 +1064,9 @@ class IpAddressToISOCountryCodeTransformer(BaseEstimator, TransformerMixin):
         try:
             with open(self.cache_file, 'w', encoding='utf-8') as f:
                 json.dump(self.ip_cache_, f, ensure_ascii=False, indent=2)
-            print(f"- Cache guardado en: {self.cache_file}")
+            print(f"  - Cache guardado en: {self.cache_file}")
         except Exception as e:
-            print(f"Error al guardar fichero de caché: {e}")
+            print(f"  - Error al guardar fichero de caché: {e}")
     
     def _get_country_from_ip(self, ip: str) -> str:
         """
@@ -998,7 +1094,7 @@ class IpAddressToISOCountryCodeTransformer(BaseEstimator, TransformerMixin):
             return country_code
             
         except Exception as e:
-            print(f"Error consultando IP {ip}: {e}")
+            print(f"  - Error consultando IP {ip}: {e}")
             # En caso de error guardamos y devolvemos 'Error'
             self.ip_cache_[ip] = 'Error'
             return 'Error'
@@ -1040,7 +1136,7 @@ class DeltaTimeBetweenDatetimesTransformer(BaseEstimator, TransformerMixin):
         if hasattr(X, 'iloc'):  # Es un DataFrame
             datetime_series = X.iloc[:, 0]  # Se asume que datetime está en la primera columna   
             datetime_delta_between_request = []
-            print ("- Adding col. datetime_delta_ms (tiempo en ms. transcurrido entre peticiones consecutivas")
+            print ("  - Adding col. datetime_delta_ms (tiempo en ms. transcurrido entre peticiones consecutivas")
             
             datetime_series= pd.to_datetime(datetime_series, format='%d/%b/%Y:%H:%M:%S %z', errors='coerce')
        
@@ -1060,7 +1156,7 @@ class DeltaTimeBetweenDatetimesTransformer(BaseEstimator, TransformerMixin):
         else:  # Es un array
             X_array = check_array(X, dtype=object)
             assert self.n_features_in_ == X_array.shape[1]
-            print ("- Adding col. datetime_delta_ms (tiempo en ms. transcurrido entre peticiones consecutivas")
+            print ("  - Adding col. datetime_delta_ms (tiempo en ms. transcurrido entre peticiones consecutivas")
             
             datetime_delta_between_request = []
             datetime_series= pd.to_datetime(X_array, format='%d/%b/%Y:%H:%M:%S %z')
@@ -1167,7 +1263,7 @@ class GetInfoSessionTransformer(BaseEstimator,TransformerMixin):
 
             #transform temp_series
             #------------------------------
-            print (f"- Adding col. session_global_id and datetime_delta_ms_in_session (id de sesión: request from same IP in range {self.session_minutes} min.")
+            print (f"  - Adding col. session_global_id and datetime_delta_ms_in_session (id de sesión: request from same IP in range {self.session_minutes} min.")
             
             X = X.sort_values(by=['client', 'datetime'])
             X['datetime'] = pd.to_datetime(X['datetime'],format='%d/%b/%Y:%H:%M:%S %z',errors='coerce')
@@ -1781,7 +1877,17 @@ class PandasCompatibleHashingVectorizer(BaseEstimator, TransformerMixin):
         """Fit y transform en un solo paso"""
         return self.fit(X, y).transform(X)
 
-log_transformer = FunctionTransformer(np.log1p, feature_names_out='one-to-one')
+def safe_log1p_zero(x):
+    if not x.mode().empty:
+        mode_value = x.mode().iloc[0]
+    else:
+        mode_value = 0 
+
+    x = x.fillna(mode_value)
+    x = np.where(x <= -1, 0, x)
+    return np.log1p(x)
+
+log_transformer = FunctionTransformer(safe_log1p_zero, feature_names_out='one-to-one')
 
 COUNTRY_CODE_PIPE = Pipeline([
         ("country_code", IpAddressToISOCountryCodeTransformer(IPINFO_TOKEN,CACHE_FILE)),
@@ -1795,6 +1901,11 @@ NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE = Pipeline([
 
 NORMALIZED_LENGTH_PIPE = Pipeline([
     ("len",CalculateLengthTransformer()),
+    ("log", log_transformer),
+    ("mixmax", MinMaxScaler())
+])
+
+NORMALIZED_NUM = Pipeline([
     ("log", log_transformer),
     ("mixmax", MinMaxScaler())
 ])

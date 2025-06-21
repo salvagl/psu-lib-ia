@@ -87,6 +87,9 @@ def transform_data(data:pd.DataFrame)->pd.DataFrame:
 #**********************************************************************************************
 #                              FUNCIONES AUX. DE LA UI
 #********************************************************************************************** 
+#VAR. GLOBALES:
+TRAIN_MODE = "TRAIN_MODE"
+PREDICT_MODE = "PREDICT_MODE"
 #Funciones de visualización en UI
 def render_dataframe_sample(df:pd.DataFrame):
     print(f"- [render_dataframe_sample] printing loaded data (procesed={st.session_state["data_processed_flag"]})")
@@ -146,20 +149,11 @@ def render_anomalies_grid(original_df, predictions):
     st.subheader("🚨 Registros con Anomalías Detectadas")
     
     if len(anomalies_df) > 0:
-        # Opción 1: Grid básico con st.dataframe
         st.dataframe(
             anomalies_display,
             use_container_width=True,
             height=400
         )
-        
-        # Opción 2: Grid editable con st.data_editor (comentado)
-        # st.data_editor(
-        #     anomalies_display,
-        #     use_container_width=True,
-        #     height=400,
-        #     disabled=True  # Solo lectura
-        # )
         
         # Botón para descargar las anomalías
         csv_data = anomalies_display.to_csv(index=False)
@@ -206,11 +200,11 @@ def load_pretrained_model(selected_model:str, algorithm:str):
 def render_training_results_graphic(uiMode:str,algorithm:str):
     print(f"- [render_training_results_graphic] UI Mode: {uiMode}-{algorithm}")
     st.markdown("---")
-    st.header("Resultados del Entrenamiento")
+    st.header("Resultados del Entrenamiento sobre el dataset de validación")
 
     # Métricas
     col1, col2, col3 = st.columns(3)
-    confusion_matrix = st.session_state['confusion_matrix']
+    confusion_matrix = st.session_state.confusion_matrix
     
     if algorithm == "Isolation Forest":
         with col1:
@@ -232,9 +226,9 @@ def render_training_results_graphic(uiMode:str,algorithm:str):
     st.subheader("Visualizaciones")
     
     if algorithm == "Isolation Forest":
-        predictions = st.session_state['predictions']
-        pca_data = st.session_state['pca_data']
-        
+        predictions = st.session_state.predictions
+        pca_data = st.session_state.pca_data
+        validation_data = st.session_state.validation_data
         # Crear gráfico de dispersión con PCA
         fig = px.scatter(
             x=pca_data[:, 0],
@@ -249,9 +243,7 @@ def render_training_results_graphic(uiMode:str,algorithm:str):
         fig.update_layout(template="plotly_white")
         st.plotly_chart(fig, use_container_width=True)
 
-        df_original = st.session_state['data']
-
-        render_anomalies_grid(df_original,predictions)
+        render_anomalies_grid(validation_data,predictions)
         
     else:  # K-Means
         cluster_labels = st.session_state['cluster_labels']
@@ -389,17 +381,16 @@ def render_training_ui_mode() -> str:
                 # Seleccionar solo columnas numéricas
                 #numeric_df = df.select_dtypes(include=[np.number])
                 train_params = st.session_state.train_params
-                print ("********** train_params*************")
-                print (st.session_state.train_params)
 
                 if algorithm == "Isolation Forest":
                     model = IsolationForestModel()
-                    confusion_matrix, predictions, pca_data = model.train_model(df, train_params)
+                    confusion_matrix, predictions, pca_data, validation_data = model.train_model(df, train_params)
                     
                     st.session_state['model'] = model
                     st.session_state['predictions'] = predictions
                     st.session_state['pca_data'] = pca_data
                     st.session_state['confusion_matrix'] = confusion_matrix
+                    st.session_state['validation_data'] = validation_data
                     
                 else:  # K-Means
                     model = KMeansModel()
@@ -412,8 +403,10 @@ def render_training_ui_mode() -> str:
                     st.session_state['anomalies'] = anomalies
                     st.session_state['distances'] = distances
             
+            
+            st.session_state.result_ready = True
+            st.session_state.ui_mode = TRAIN_MODE
             st.success("¡Modelo entrenado exitosamente!")
-            st.session_state["result_ready"]=True
     with col2:
         # Configuración específica del algoritmo
         st.text("Hiperparámetros")
@@ -541,6 +534,7 @@ def render_predict_ui_mode()-> tuple [AIModelInterface, str]:
                             #st.session_state['anomalies'] = anomalies
                         
                         st.session_state["result_ready"]=True
+                        st.session_state.ui_mode = PREDICT_MODE
                         st.success("Predicción realizada exitosamente!")
         else:
             st.info("🔽 No hay ningún modelo cargado en memoria. Por favor, selecciona una opción de la lista y carga un modelo para realizar la predicción")
@@ -596,9 +590,6 @@ if 'render_count' not in st.session_state:
 print("...................................................................................")
 print(f"                               RENDERING:UI [{st.session_state.render_count}]")
 print("...................................................................................")
-#VAR. GLOBALES:
-TRAIN_MODE = "TRAIN_MODE"
-PREDICT_MODE = "PREDICT_MODE"
 
 #Inicialización de FLAGS y var.  que controlan la UI:
 initialize_session_state()
@@ -617,7 +608,7 @@ st.markdown("---")
 # Carga de datos
 st.sidebar.header("Cargar Datos")
 uploaded_file = st.sidebar.file_uploader("Subir archivo de logs (.log) en formato CLF", type=['log'],
-                                         help="Selecciona un fichero log en formato CLF",
+                                         help="Selecciona un fichero log en formato CLF"
                                         )
 
 # Gestión de la lectura de datos del fichero de logs seleccionado en formato CLF
@@ -739,7 +730,7 @@ if 'data' in st.session_state:
 
     #VISUALIZAR RESULTADOS SI HAY DISPONIBLES EN SESIÓN
     if 'model' in st.session_state and st.session_state.result_ready:
-        print (f"- Hay model en sesión y resultados: {st.session_state.ui_mode}{algorithm}")
+        print (f"- Hay model en sesión y resultados: {st.session_state.ui_mode}-{algorithm}")
         
         if st.session_state.ui_mode==TRAIN_MODE:
             print("- TRAIN MODE: se muestran gráficos, grid y gestión para guardar el modelo")

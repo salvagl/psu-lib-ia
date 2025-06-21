@@ -15,7 +15,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from AIlibrary import COUNTRY_CODE_PIPE,NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE,NORMALIZED_LENGTH_PIPE,NORMALIZED_DELTATIME_BETWEEN_REQUEST_IN_SESSION_PIPE
+from AIlibrary import NORMALIZED_NUM,COUNTRY_CODE_PIPE,NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE,NORMALIZED_LENGTH_PIPE,NORMALIZED_DELTATIME_BETWEEN_REQUEST_IN_SESSION_PIPE
 def main2():
     
     print("Hello from psu-lib-ia!")
@@ -26,7 +26,7 @@ def main2():
     session_min =20
     transformer = DataTransformer(token=IPINFO_TOKEN,cache_file=CACHE_FILE,session_minutes=session_min)
 
-    df = reader.logs_to_df(logfile='./data/logs_50M.log', output_dir='temp_dir/', errors_file='errors.txt')
+    df = reader.logs_to_df(logfile='./data/extracto200M.log', output_dir='temp_dir/', errors_file='errors.txt')
     
     print("--------------------------------------------------------------------------------")
     print ("Transform Data:")
@@ -40,29 +40,30 @@ def main2():
     # - añadir flag que indica si la request contiene caracteres Hexadecimales
     # - añadir columna con conteo de caracteres extraños para una URL
     
-    # transformation = ColumnTransformer([
-    #     ("t00", "drop",['userid']),
-    #     ("pipe01",COUNTRY_CODE_PIPE.set_output(transform="pandas"),['client'] ),
-    #     ("pipe02", NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE.set_output(transform="pandas"),['datetime']),
-    #     ("pipe03", NORMALIZED_LENGTH_PIPE.set_output(transform="pandas"),['request','referer']),
-    #     ("pipe04", NORMALIZED_DELTATIME_BETWEEN_REQUEST_IN_SESSION_PIPE.set_output(transform="pandas"),['client','datetime']),
-    #     ("t05", AddOsCommandFlagTransformer(),['raw_request']),
-    #     ("t06", AddHexadecimalCharactersFlagTransformer(),['raw_request']),
-    #     ("t07", AddWeirdCharactersFrequencyTransformer(),['raw_request']),
-    #     ("t08", OneHotEncoder(handle_unknown='ignore',sparse_output=False, drop=None),['method','status']),
-    #     ("t09", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['request']),  
-    #     ("t10", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['referer']),               #tokenizado por "/"
-    #     ("t11", PandasCompatibleCountVectorizer(token_pattern=r'\b\w+\b',max_features=100,output_transform="pandas"),['user_agent']),                 #tokenizado por palabra
-    #     ("t12", PandasCompatibleTfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200,output_transform="pandas"), ['raw_request'])  #tokenizado por datagramas entre 3 y 6 char para detectar patrones de comandos    
-    # ], remainder='passthrough', verbose_feature_names_out=True)
-    # transformation.set_output(transform="pandas")
-    # final_df = transformation.fit_transform(df)
+    transformation = ColumnTransformer([
+         ("t00", "drop",['userid']),
+         ("pipe01",COUNTRY_CODE_PIPE.set_output(transform="pandas"),['client'] ),
+         ("pipe02", NORMALIZED_DELTATIME_BETWEEN_REQUEST_PIPE.set_output(transform="pandas"),['datetime']),
+         ("pipe03", NORMALIZED_LENGTH_PIPE.set_output(transform="pandas"),['request','referer']),
+         ("pipe04", NORMALIZED_DELTATIME_BETWEEN_REQUEST_IN_SESSION_PIPE.set_output(transform="pandas"),['client','datetime']),
+         ('pipe05', NORMALIZED_NUM.set_output(transform='pandas'),['size_in_bytes']),
+         ("t05", AddOsCommandFlagTransformer(),['raw_request']),
+         ("t06", AddHexadecimalCharactersFlagTransformer(),['raw_request']),
+         ("t07", AddWeirdCharactersFrequencyTransformer(),['raw_request']),
+         ("t08", OneHotEncoder(handle_unknown='ignore',sparse_output=False, drop=None),['method','status']),
+         ("t09", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['request']),  
+         ("t10", PandasCompatibleCountVectorizer(token_pattern=r'[^/]+',max_features=100,output_transform="pandas"),['referer']),               #tokenizado por "/"
+         ("t11", PandasCompatibleCountVectorizer(token_pattern=r'\b\w+\b',max_features=100,output_transform="pandas"),['user_agent']),                 #tokenizado por palabra
+         ("t12", PandasCompatibleTfidfVectorizer(analyzer='char_wb', ngram_range=(3, 6),max_features=200,output_transform="pandas"), ['raw_request'])  #tokenizado por datagramas entre 3 y 6 char para detectar patrones de comandos    
+    ], remainder='passthrough', verbose_feature_names_out=True)
+    transformation.set_output(transform="pandas")
+    final_df = transformation.fit_transform(df)
 
-    selected_model='mi_modelo_1k_isolation_forest'
-    model = IsolationForestModel()
-    model.load_model(selected_model.replace('_isolation_forest', ''))
-    predictions, scores, pca_data = model.test_model(df)
-    final_df = model.transformer.transform(df)
+    # selected_model='mi_modelo_1k_isolation_forest'
+    # model = IsolationForestModel()
+    # model.load_model(selected_model.replace('_isolation_forest', ''))
+    # predictions, scores, pca_data = model.test_model(df)
+    # final_df = model.transformer.transform(df)
 
     print("--------------------------------------------------------------------------------")
     print ("final_df Data:")
